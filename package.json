@@ -1,0 +1,16 @@
+{
+  "name": "pc-hackathon-pgx-demo",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Clinical decision support MVP for pharmacogenetic antidepressant evidence lookup.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^4.21.2"
+  }
+}

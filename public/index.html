@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Datum Clinical PGx Demo</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="shell">
+      <header class="hero">
+        <div>
+          <p class="eyebrow">Pharmacogenetic Antidepressant Guidance</p>
+          <h1>Source-grounded clinical decision support</h1>
+          <p class="lede">
+            Interpret gene-drug guidance from CPIC. This demo does not diagnose depression,
+            prescribe medication, or choose a drug.
+          </p>
+        </div>
+        <div class="hero-panel">
+          <p class="hero-label">Safety Notice</p>
+          <p id="global-disclaimer" class="disclaimer"></p>
+        </div>
+      </header>
+
+      <main class="layout">
+        <section class="main-column">
+          <section class="card">
+            <div class="section-heading">
+              <div>
+                <p class="section-kicker">1. Patient PGx Input</p>
+                <h2>Manual phenotype entry</h2>
+              </div>
+              <button id="load-demo" class="secondary-button" type="button">Load Demo Patient</button>
+            </div>
+            <div class="form-grid three-up">
+              <label>
+                Patient name
+                <input id="patientName" type="text" placeholder="Demo-only name" />
+              </label>
+              <label>
+                Age
+                <input id="age" type="number" min="0" max="120" />
+              </label>
+              <label>
+                Clinical context
+                <input id="condition" type="text" placeholder="Major depressive symptoms" />
+              </label>
+            </div>
+            <label>
+              Previous medication issue
+              <input id="previousIssue" type="text" placeholder="e.g. nausea and insomnia after SSRI" />
+            </label>
+            <div class="form-grid three-up">
+              <label>
+                CYP2C19 phenotype
+                <input id="gene-CYP2C19" type="text" placeholder="Poor Metabolizer" />
+              </label>
+              <label>
+                CYP2D6 phenotype
+                <input id="gene-CYP2D6" type="text" placeholder="Normal Metabolizer" />
+              </label>
+              <label>
+                CYP2B6 phenotype
+                <input id="gene-CYP2B6" type="text" placeholder="Intermediate Metabolizer" />
+              </label>
+            </div>
+          </section>
+
+          <section class="card">
+            <div class="section-heading">
+              <div>
+                <p class="section-kicker">2. Medication Search</p>
+                <h2>Antidepressant lookup</h2>
+              </div>
+            </div>
+            <div class="search-row">
+              <label class="search-field">
+                Medication considered
+                <input id="drugQuery" type="text" placeholder="escitalopram, sertraline, citalopram..." />
+              </label>
+              <button id="search-drug" class="secondary-button" type="button">Search CPIC</button>
+              <button id="run-evaluation" class="primary-button" type="button">Run Evidence Lookup</button>
+            </div>
+            <div id="search-status" class="inline-status"></div>
+            <div id="drug-results" class="simple-list"></div>
+          </section>
+
+          <section class="card">
+            <div class="section-heading">
+              <div>
+                <p class="section-kicker">Validation Mode</p>
+                <h2>Multi-case backend verification</h2>
+              </div>
+              <button id="run-validation" class="secondary-button" type="button">Run validation suite</button>
+            </div>
+            <div id="validation-status" class="inline-status">
+              Run the suite to prove the app works beyond a single demo case.
+            </div>
+            <div id="validation-summary" class="validation-summary">
+              <div class="summary-tile">
+                <span class="meta-label">Passed</span>
+                <strong id="summary-pass-rate">0 / 0 tests passed</strong>
+              </div>
+              <div class="summary-tile">
+                <span class="meta-label">Live CPIC Results</span>
+                <strong id="summary-live-count">0</strong>
+              </div>
+              <div class="summary-tile">
+                <span class="meta-label">Safe Failures</span>
+                <strong id="summary-safe-failures">0</strong>
+              </div>
+              <div class="summary-tile">
+                <span class="meta-label">Hallucinated Recommendations</span>
+                <strong id="summary-hallucinations">0</strong>
+              </div>
+            </div>
+            <div id="validation-results" class="validation-grid"></div>
+          </section>
+
+          <section class="card">
+            <div class="section-heading">
+              <div>
+                <p class="section-kicker">3. Evidence Match</p>
+                <h2>CPIC evidence cards</h2>
+              </div>
+              <span id="source-badge" class="status-badge">Awaiting lookup</span>
+            </div>
+            <div id="result-status" class="inline-status"></div>
+            <div id="recommendation-cards" class="stack"></div>
+            <div id="empty-state" class="empty-state">
+              Run a medication lookup to see gene-drug evidence.
+            </div>
+          </section>
+
+          <section class="card">
+            <div class="section-heading">
+              <div>
+                <p class="section-kicker">4. Clinical Interpretation</p>
+                <h2>Grounded summary</h2>
+              </div>
+            </div>
+            <div id="doctor-summary" class="summary-box muted">
+              No summary yet.
+            </div>
+          </section>
+
+          <section class="card">
+            <div class="section-heading">
+              <div>
+                <p class="section-kicker">5. Patient Explanation</p>
+                <h2>Patient-friendly wording</h2>
+              </div>
+            </div>
+            <div id="patient-summary" class="summary-box muted">
+              No explanation yet.
+            </div>
+          </section>
+
+          <section class="card">
+            <div class="section-heading">
+              <div>
+                <p class="section-kicker">6. Follow-up Plan</p>
+                <h2>Next clinical checks</h2>
+              </div>
+            </div>
+            <div id="follow-up-summary" class="summary-box muted">
+              No follow-up plan yet.
+            </div>
+          </section>
+        </section>
+
+        <aside class="side-column">
+          <section class="card side-card">
+            <p class="section-kicker">Evidence Mode</p>
+            <h2>Raw CPIC fields used</h2>
+            <div id="evidence-mode" class="code-panel">No evidence loaded.</div>
+          </section>
+
+          <section class="card side-card">
+            <p class="section-kicker">Safety</p>
+            <h2>Guardrails</h2>
+            <ul class="guardrail-list">
+              <li>Clinical decision support only. Final decision remains with the physician.</li>
+              <li>No diagnosis or prescribing claims are made in this demo.</li>
+              <li>Summaries are grounded only in retrieved CPIC data or clearly labeled fallback demo data.</li>
+            </ul>
+          </section>
+        </aside>
+      </main>
+    </div>
+
+    <script src="/app.js"></script>
+  </body>
+  </html>
