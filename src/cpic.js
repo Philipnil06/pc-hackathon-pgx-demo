@@ -212,6 +212,8 @@ class FallbackError extends Error {
   }
 }
 
+const geneMetadataCache = new Map();
+
 function normalizeDrugName(query) {
   const cleaned = String(query || "").trim().toLowerCase();
   return ANTIDEPRESSANT_ALIASES[cleaned] || cleaned;
@@ -366,12 +368,61 @@ async function searchCpicPairs(drugName) {
 }
 
 async function getCpicRecommendation({ drugId, population, lookupKey }) {
-  const encodedLookupKey = encodeURIComponent(JSON.stringify(lookupKey));
+  const encodedLookupKey = encodeURIComponent(stableStringify(lookupKey));
   return fetchCpic(
     `/recommendation?drugid=eq.${encodeURIComponent(drugId)}&population=eq.${encodeURIComponent(
       population,
     )}&lookupkey=eq.${encodedLookupKey}`,
   );
+}
+
+function stableStringify(value) {
+  if (Array.isArray(value)) {
+    return `[${value.map((entry) => stableStringify(entry)).join(",")}]`;
+  }
+
+  if (value && typeof value === "object") {
+    const keys = Object.keys(value).sort();
+    return `{${keys
+      .map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`)
+      .join(",")}}`;
+  }
+
+  return JSON.stringify(value);
+}
+
+function buildRecommendationQueryUrl({ drugId, population, lookupKey = null }) {
+  const base = `${CPIC_BASE_URL}/recommendation?drugid=eq.${encodeURIComponent(drugId)}`;
+  const populationPart = `&population=eq.${encodeURIComponent(population)}`;
+
+  if (!lookupKey) {
+    return `${base}${populationPart}`;
+  }
+
+  return `${base}${populationPart}&lookupkey=eq.${encodeURIComponent(stableStringify(lookupKey))}`;
+}
+
+async function getGene(symbol) {
+  const normalized = String(symbol || "").trim().toUpperCase();
+  if (!normalized) {
+    return null;
+  }
+
+  if (geneMetadataCache.has(normalized)) {
+    return geneMetadataCache.get(normalized);
+  }
+
+  const rows = await fetchCpic(`/gene?symbol=eq.${encodeURIComponent(normalized)}`);
+  const gene = rows[0] || null;
+  geneMetadataCache.set(normalized, gene);
+  return gene;
+}
+
+async function getRecommendationsForDrug({ drugId, population = null }) {
+  const path = population
+    ? `/recommendation?drugid=eq.${encodeURIComponent(drugId)}&population=eq.${encodeURIComponent(population)}`
+    : `/recommendation?drugid=eq.${encodeURIComponent(drugId)}`;
+  return fetchCpic(path);
 }
 
 async function getGuideline(guidelineId) {
@@ -401,6 +452,70 @@ function buildNoRecommendationReasons(pairMatches, normalizedPhenotypes) {
   reasons.push("Data unavailable");
 
   return [...new Set(reasons)];
+}
+
+function dedupeRecommendations(recommendations) {
+  const seen = new Set();
+  const unique = [];
+
+  for (const recommendation of recommendations) {
+    const key = stableStringify({
+      phenotypes: recommendation.phenotypes || {},
+      lookupkey: recommendation.lookupkey || {},
+      classification: recommendation.classification || "",
+      drugrecommendation: recommendation.drugrecommendation || "",
+      population: recommendation.population || "",
+    });
+
+    if (!seen.has(key)) {
+      seen.add(key);
+      unique.push(recommendation);
+    }
+  }
+
+  return unique;
+}
+
+function filterRecommendationsByPhenotype({ recommendations, lookupGenes, normalizedPhenotypes }) {
+  return recommendations.filter((recommendation) =>
+    lookupGenes.every((gene) => {
+      const rowPhenotype = recommendation.phenotypes?.[gene];
+      return rowPhenotype && rowPhenotype === normalizedPhenotypes[gene];
+    }),
+  );
+}
+
+function determineNoRecommendationReason({
+  pairMatches,
+  eligiblePairs,
+  normalizedPhenotypes,
+  validationError,
+  suggestion,
+}) {
+  if (validationError) {
+    return validationError;
+  }
+
+  if (suggestion) {
+    return `No CPIC drug match found. Suggested ${suggestion}.`;
+  }
+
+  if (!pairMatches.length) {
+    return "Drug not covered by CPIC.";
+  }
+
+  if (eligiblePairs.length > 0) {
+    return "CPIC pair exists, but no exact phenotype recommendation matched.";
+  }
+
+  const coveredGenes = new Set(pairMatches.map((pair) => pair.genesymbol));
+  const matchedGene = Object.keys(normalizedPhenotypes).some((gene) => coveredGenes.has(gene));
+
+  if (!matchedGene) {
+    return "Gene phenotype does not match available lookup keys.";
+  }
+
+  return "Data unavailable.";
 }
 
 function createGroundedSummaries({ recommendation, patientContext, gene, drugName }) {
@@ -467,6 +582,17 @@ function buildNoDrugMatchResult({
     recommendationMatches: [],
     matchedGene: null,
     matchedLookupKey: null,
+    candidateRecommendationRows: [],
+    debugLookup: {
+      attemptedLookupKeys: [],
+      recommendationQueryUrls: [],
+      genesUsedForLookup: [],
+      lookupMode: "none",
+      geneLookupMethods: {},
+      noRecommendationReason: suggestion
+        ? `No CPIC drug match found. Suggested ${suggestion}.`
+        : "Drug not covered by CPIC.",
+    },
     guideline: null,
     sourceUsed: "No live CPIC match",
     suggestion,
@@ -504,6 +630,15 @@ async function getMedicationWorkflow({
       recommendationMatches: [],
       matchedGene: null,
       matchedLookupKey: null,
+      candidateRecommendationRows: [],
+      debugLookup: {
+        attemptedLookupKeys: [],
+        recommendationQueryUrls: [],
+        genesUsedForLookup: [],
+        lookupMode: "none",
+        geneLookupMethods: {},
+        noRecommendationReason: validationError,
+      },
       guideline: null,
       sourceUsed: "Validation error",
       suggestion: null,
@@ -554,24 +689,115 @@ async function getMedicationWorkflow({
     let recommendationMatches = [];
     let matchedGene = null;
     let matchedLookupKey = null;
+    const attemptedLookupKeys = [];
+    const recommendationQueryUrls = [];
+    const genesUsedForLookup = [];
+    const geneLookupMethods = {};
+    let lookupMode = "none";
 
-    for (const pair of eligiblePairs) {
-      const gene = pair.genesymbol;
-      const lookupKey = { [gene]: normalizedPhenotypes[gene] };
+    const uniqueEligibleGenes = [...new Set(eligiblePairs.map((pair) => pair.genesymbol))];
+    const geneMetadata = await Promise.all(uniqueEligibleGenes.map((gene) => getGene(gene)));
+    geneMetadata.forEach((geneRow, index) => {
+      geneLookupMethods[uniqueEligibleGenes[index]] = geneRow?.lookupmethod || "UNKNOWN";
+    });
+
+    const populationRows = await getRecommendationsForDrug({
+      drugId: primaryDrug.drugid,
+      population,
+    });
+    const allDrugRows = await getRecommendationsForDrug({
+      drugId: primaryDrug.drugid,
+    });
+
+    const exactLookupAttempts = [];
+    const phenotypeLookupGenes = uniqueEligibleGenes.filter(
+      (gene) => geneLookupMethods[gene] === "PHENOTYPE",
+    );
+
+    if (phenotypeLookupGenes.length > 1) {
+      const combinedLookupKey = phenotypeLookupGenes.reduce((accumulator, gene) => {
+        accumulator[gene] = normalizedPhenotypes[gene];
+        return accumulator;
+      }, {});
+
+      exactLookupAttempts.push({
+        genes: phenotypeLookupGenes,
+        lookupKey: combinedLookupKey,
+        mode: "multi-gene exact lookupkey",
+      });
+    }
+
+    phenotypeLookupGenes.forEach((gene) => {
+      exactLookupAttempts.push({
+        genes: [gene],
+        lookupKey: { [gene]: normalizedPhenotypes[gene] },
+        mode: "single-gene exact lookupkey",
+      });
+    });
+
+    for (const attempt of exactLookupAttempts) {
+      attemptedLookupKeys.push(attempt.lookupKey);
+      recommendationQueryUrls.push(
+        buildRecommendationQueryUrl({
+          drugId: primaryDrug.drugid,
+          population,
+          lookupKey: attempt.lookupKey,
+        }),
+      );
+      genesUsedForLookup.push(attempt.genes);
+
       const recommendations = await getCpicRecommendation({
         drugId: primaryDrug.drugid,
         population,
-        lookupKey,
+        lookupKey: attempt.lookupKey,
       });
 
       if (recommendations.length > 0) {
-        matchedGene = gene;
-        matchedLookupKey = lookupKey;
+        matchedGene = attempt.genes.join(", ");
+        matchedLookupKey = attempt.lookupKey;
+        lookupMode = attempt.mode;
         recommendationMatches = recommendationMatches.concat(recommendations);
+        break;
       }
     }
 
-    recommendationMatches = sortRecommendations(recommendationMatches);
+    if (!recommendationMatches.length && uniqueEligibleGenes.length > 0) {
+      const localLookupGenes =
+        uniqueEligibleGenes.length > 1 ? uniqueEligibleGenes : [uniqueEligibleGenes[0]];
+
+      const localAttemptedKey = localLookupGenes.reduce((accumulator, gene) => {
+        accumulator[gene] = normalizedPhenotypes[gene];
+        return accumulator;
+      }, {});
+
+      attemptedLookupKeys.push(localAttemptedKey);
+      recommendationQueryUrls.push(
+        buildRecommendationQueryUrl({
+          drugId: primaryDrug.drugid,
+          population,
+          lookupKey: null,
+        }),
+      );
+      genesUsedForLookup.push(localLookupGenes);
+
+      const localMatches = filterRecommendationsByPhenotype({
+        recommendations: populationRows,
+        lookupGenes: localLookupGenes,
+        normalizedPhenotypes,
+      });
+
+      if (localMatches.length > 0) {
+        matchedGene = localLookupGenes.join(", ");
+        matchedLookupKey = localMatches[0].lookupkey || null;
+        lookupMode =
+          localLookupGenes.length > 1
+            ? "multi-gene local phenotype match"
+            : "single-gene local phenotype match";
+        recommendationMatches = recommendationMatches.concat(localMatches);
+      }
+    }
+
+    recommendationMatches = sortRecommendations(dedupeRecommendations(recommendationMatches));
     const primaryRecommendation = recommendationMatches[0] || null;
     const guidelineId =
       primaryRecommendation?.guidelineid ||
@@ -591,6 +817,23 @@ async function getMedicationWorkflow({
       recommendationMatches,
       matchedGene,
       matchedLookupKey,
+      candidateRecommendationRows: allDrugRows,
+      debugLookup: {
+        attemptedLookupKeys,
+        recommendationQueryUrls,
+        genesUsedForLookup,
+        lookupMode,
+        geneLookupMethods,
+        noRecommendationReason: primaryRecommendation
+          ? null
+          : determineNoRecommendationReason({
+              pairMatches,
+              eligiblePairs,
+              normalizedPhenotypes,
+              validationError: null,
+              suggestion: null,
+            }),
+      },
       guideline,
       sourceUsed: primaryRecommendation ? "Live CPIC API" : "Live CPIC API with no exact recommendation",
       suggestion: null,
@@ -620,6 +863,21 @@ async function getMedicationWorkflow({
       normalizedPhenotypes,
       matchedGene: "CYP2C19",
       matchedLookupKey: { CYP2C19: "Poor Metabolizer" },
+      candidateRecommendationRows: FALLBACK_DEMO_RESULT.recommendationMatches,
+      debugLookup: {
+        attemptedLookupKeys: [{ CYP2C19: "Poor Metabolizer" }],
+        recommendationQueryUrls: [
+          buildRecommendationQueryUrl({
+            drugId: "RxNorm:321988",
+            population,
+            lookupKey: { CYP2C19: "Poor Metabolizer" },
+          }),
+        ],
+        genesUsedForLookup: [["CYP2C19"]],
+        lookupMode: "single-gene exact lookupkey",
+        geneLookupMethods: { CYP2C19: "PHENOTYPE" },
+        noRecommendationReason: null,
+      },
       sourceUsed: "Cached demo result",
       suggestion: null,
       validationError: null,

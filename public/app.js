@@ -264,7 +264,8 @@ function deriveVerdict(result) {
       icon: "–",
       label: "No specific PGx guidance",
       detail:
-        "No CPIC gene–drug recommendation matched this combination. Prescribe using standard clinical judgment; this genotype does not flag a change.",
+        result?.debugLookup?.noRecommendationReason ||
+        "No CPIC gene–drug recommendation matched this combination. No prescribing guidance was generated.",
       pills: [],
     };
   }
@@ -406,7 +407,11 @@ function renderRecommendationCards(result) {
     elements.recommendationCards.innerHTML = `
       <div class="recommendation-card">
         <header>
-          <strong>No CPIC recommendation for this exact gene–drug combination.</strong>
+          <strong>${
+            result.eligiblePairs?.length
+              ? "CPIC pair exists, but no exact phenotype recommendation matched."
+              : "No CPIC recommendation for this exact gene–drug combination."
+          }</strong>
         </header>
         <p>Possible reasons:</p>
         <ul class="guardrail-list">
@@ -485,10 +490,18 @@ function renderEvidenceMode(result) {
     normalizedDrug: result.normalizedDrug,
     normalizedPhenotypes: result.normalizedPhenotypes,
     matchedGene: result.matchedGene,
+    matchedLookupKey: result.matchedLookupKey || null,
     drugMatch: result.drugMatches?.[0] || null,
     pairMatches: result.eligiblePairs?.length ? result.eligiblePairs : result.pairMatches,
+    candidateRecommendationRows: result.candidateRecommendationRows || [],
     recommendation: result.recommendationMatches?.[0] || null,
     guideline: result.guideline,
+    attemptedLookupKeys: result.debugLookup?.attemptedLookupKeys || [],
+    recommendationQueryUrls: result.debugLookup?.recommendationQueryUrls || [],
+    genesUsedForLookup: result.debugLookup?.genesUsedForLookup || [],
+    lookupMode: result.debugLookup?.lookupMode || "none",
+    geneLookupMethods: result.debugLookup?.geneLookupMethods || {},
+    noRecommendationReason: result.debugLookup?.noRecommendationReason || null,
     fallbackUsed: result.fallbackUsed,
     fallbackReason: result.fallbackReason || null,
   };
@@ -512,7 +525,8 @@ function renderResultEnvelope(envelope) {
       ? envelope.error || result.fallbackReason || "Fallback demo data shown."
       : result.recommendationMatches?.length
         ? "Live CPIC recommendation retrieved."
-        : "Lookup completed. No exact CPIC recommendation matched.",
+        : result.debugLookup?.noRecommendationReason ||
+          "Lookup completed. No exact CPIC recommendation matched.",
     fallbackUsed ? "flag-fallback" : "flag-live",
   );
 }
