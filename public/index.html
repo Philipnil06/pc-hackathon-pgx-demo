@@ -3,193 +3,267 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Datum Clinical PGx Demo</title>
+    <title>Datum PGx — Pharmacogenomic Decision Support</title>
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
-    <div class="shell">
-      <header class="hero">
-        <div>
-          <p class="eyebrow">Pharmacogenetic Antidepressant Guidance</p>
-          <h1>Source-grounded clinical decision support</h1>
-          <p class="lede">
-            Interpret gene-drug guidance from CPIC. This demo does not diagnose depression,
-            prescribe medication, or choose a drug.
-          </p>
+    <div class="app">
+      <header class="topbar">
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true">Dx</span>
+          <div class="brand-text">
+            <strong>Datum PGx</strong>
+            <span>Pharmacogenomic Decision Support</span>
+          </div>
         </div>
-        <div class="hero-panel">
-          <p class="hero-label">Safety Notice</p>
-          <p id="global-disclaimer" class="disclaimer"></p>
+        <div class="topbar-right">
+          <span class="env-badge">Demo environment · synthetic patients</span>
+          <span class="clinician">
+            <span class="clinician-avatar" aria-hidden="true">MP</span>
+            Pharmacogenomics service
+          </span>
         </div>
       </header>
 
-      <main class="layout">
-        <section class="main-column">
-          <section class="card">
-            <div class="section-heading">
-              <div>
-                <p class="section-kicker">1. Patient PGx Input</p>
-                <h2>Manual phenotype entry</h2>
-              </div>
-              <button id="load-demo" class="secondary-button" type="button">Load Demo Patient</button>
-            </div>
-            <div class="form-grid three-up">
-              <label>
-                Patient name
-                <input id="patientName" type="text" placeholder="Demo-only name" />
-              </label>
-              <label>
-                Age
-                <input id="age" type="number" min="0" max="120" />
-              </label>
-              <label>
-                Clinical context
-                <input id="condition" type="text" placeholder="Major depressive symptoms" />
-              </label>
-            </div>
-            <label>
-              Previous medication issue
-              <input id="previousIssue" type="text" placeholder="e.g. nausea and insomnia after SSRI" />
-            </label>
-            <div class="form-grid three-up">
-              <label>
-                CYP2C19 phenotype
-                <input id="gene-CYP2C19" type="text" placeholder="Poor Metabolizer" />
-              </label>
-              <label>
-                CYP2D6 phenotype
-                <input id="gene-CYP2D6" type="text" placeholder="Normal Metabolizer" />
-              </label>
-              <label>
-                CYP2B6 phenotype
-                <input id="gene-CYP2B6" type="text" placeholder="Intermediate Metabolizer" />
-              </label>
-            </div>
+      <section class="hero-band">
+        <h1>The right antidepressant, without the months of trial and error</h1>
+        <p class="hero-sub">
+          Finding a medication that works can take months of guesswork, because people
+          metabolize drugs differently depending on their genes. Datum reads a patient's
+          pharmacogenomic profile and shows which antidepressants fit, grounded in published CPIC guidance.
+        </p>
+        <p class="hero-flow">
+          Genotype <span aria-hidden="true">→</span> computed phenotype <span aria-hidden="true">→</span> ranked guidance across every drug.
+          <strong>Advisory only. It does not diagnose or prescribe.</strong>
+        </p>
+      </section>
+
+      <div class="workspace">
+        <aside class="worklist">
+          <p class="panel-kicker">Patient worklist</p>
+          <div id="patient-roster" class="roster"></div>
+
+          <div class="guardrails-block">
+            <p class="panel-kicker">Safety guardrails</p>
+            <ul class="guardrail-list">
+              <li>Clinical decision support only. The final decision remains with the prescriber.</li>
+              <li>No diagnosis or prescribing is performed by this tool.</li>
+              <li>Guidance is grounded only in retrieved CPIC data, or clearly labeled demo data.</li>
+            </ul>
+            <p id="global-disclaimer" class="disclaimer"></p>
+          </div>
+        </aside>
+
+        <main class="chart">
+          <section id="patient-banner" class="patient-banner empty">
+            <p>Select a patient from the worklist to open their pharmacogenomic chart.</p>
           </section>
 
-          <section class="card">
+          <section class="card" id="genomics-card" hidden>
             <div class="section-heading">
               <div>
-                <p class="section-kicker">2. Medication Search</p>
-                <h2>Antidepressant lookup</h2>
+                <p class="section-kicker">Pharmacogenomic profile</p>
+                <h2>Lab-reported genotype</h2>
+              </div>
+              <span id="genomics-source-badge" class="status-badge subtle">Source: clinical lab panel</span>
+            </div>
+            <div id="genotype-chips" class="chips"></div>
+
+            <details class="inline-edit genotype-ingest" id="genotype-ingest">
+              <summary>Upload or paste a raw genotype (Datum computes the phenotype)</summary>
+              <p class="ingest-help">
+                Paste lab-reported star-allele diplotypes, one gene per line
+                (e.g. <code>CYP2C19&#9;*2/*2</code>). Datum maps each diplotype to a
+                metabolizer phenotype using published CPIC allele tables. Nothing is entered by hand.
+              </p>
+              <div class="ingest-samples">
+                <span class="meta-label">Load a sample report</span>
+                <button class="secondary-button" type="button" data-sample="anna">Anna · CYP2C19 *2/*2</button>
+                <button class="secondary-button" type="button" data-sample="erik">Erik · CYP2D6 *4/*4</button>
+                <button class="secondary-button" type="button" data-sample="sofia">Sofia · CYP2C19 *17/*17</button>
+              </div>
+              <label class="ingest-field">
+                Raw genotype
+                <textarea id="genotype-input" rows="5" spellcheck="false" placeholder="CYP2C19&#9;*2/*2&#10;CYP2D6&#9;*1/*1"></textarea>
+              </label>
+              <div class="ingest-actions">
+                <input id="genotype-file" type="file" accept=".txt,.json,.tsv,.csv" hidden />
+                <button id="genotype-file-trigger" class="secondary-button" type="button">Choose file…</button>
+                <button id="genotype-parse" class="primary-button" type="button">Compute phenotypes</button>
+              </div>
+              <div id="genotype-ingest-status" class="inline-status"></div>
+              <div id="genotype-ingest-report" class="ingest-report"></div>
+            </details>
+
+            <details class="inline-edit">
+              <summary>Edit patient &amp; genomic values</summary>
+              <div class="form-grid three-up">
+                <label>
+                  Patient name
+                  <input id="patientName" type="text" placeholder="Patient name" />
+                </label>
+                <label>
+                  Age
+                  <input id="age" type="number" min="0" max="120" />
+                </label>
+                <label>
+                  Indication
+                  <input id="condition" type="text" placeholder="Major depressive disorder" />
+                </label>
+              </div>
+              <label>
+                Relevant history
+                <input id="previousIssue" type="text" placeholder="e.g. nausea and insomnia after prior SSRI" />
+              </label>
+              <div class="form-grid three-up">
+                <label>
+                  CYP2C19 phenotype
+                  <input id="gene-CYP2C19" type="text" placeholder="Poor Metabolizer" />
+                </label>
+                <label>
+                  CYP2D6 phenotype
+                  <input id="gene-CYP2D6" type="text" placeholder="Normal Metabolizer" />
+                </label>
+                <label>
+                  CYP2B6 phenotype
+                  <input id="gene-CYP2B6" type="text" placeholder="Intermediate Metabolizer" />
+                </label>
+              </div>
+            </details>
+          </section>
+
+          <section class="card" id="order-card">
+            <div class="section-heading">
+              <div>
+                <p class="section-kicker">Medication review</p>
+                <h2>Check an antidepressant against this patient's genotype</h2>
               </div>
             </div>
             <div class="search-row">
               <label class="search-field">
                 Medication considered
-                <input id="drugQuery" type="text" placeholder="escitalopram, sertraline, citalopram..." />
+                <input id="drugQuery" type="text" placeholder="escitalopram, sertraline, venlafaxine..." />
               </label>
-              <button id="search-drug" class="secondary-button" type="button">Search CPIC</button>
-              <button id="run-evaluation" class="primary-button" type="button">Run Evidence Lookup</button>
+              <button id="search-drug" class="secondary-button" type="button">Look up drug</button>
+              <button id="run-evaluation" class="primary-button" type="button">Check genotype match</button>
             </div>
             <div id="search-status" class="inline-status"></div>
             <div id="drug-results" class="simple-list"></div>
+            <div class="fanout-cta">
+              <button id="run-fanout" class="primary-button wide" type="button">
+                Rank all antidepressants for this patient
+              </button>
+              <span class="fanout-cta-note">Checks every supported drug against this genotype at once.</span>
+            </div>
           </section>
 
-          <section class="card">
+          <section id="verdict" class="verdict" hidden></section>
+
+          <section class="card" id="fanout-card" hidden>
             <div class="section-heading">
               <div>
-                <p class="section-kicker">Validation Mode</p>
-                <h2>Multi-case backend verification</h2>
+                <p class="section-kicker">Genotype-guided ranking</p>
+                <h2>Antidepressants ranked for this patient</h2>
               </div>
-              <button id="run-validation" class="secondary-button" type="button">Run validation suite</button>
+              <span id="fanout-summary" class="status-badge subtle"></span>
             </div>
-            <div id="validation-status" class="inline-status">
-              Run the suite to prove the app works beyond a single demo case.
-            </div>
-            <div id="validation-summary" class="validation-summary">
-              <div class="summary-tile">
-                <span class="meta-label">Passed</span>
-                <strong id="summary-pass-rate">0 / 0 tests passed</strong>
-              </div>
-              <div class="summary-tile">
-                <span class="meta-label">Live CPIC Results</span>
-                <strong id="summary-live-count">0</strong>
-              </div>
-              <div class="summary-tile">
-                <span class="meta-label">Safe Failures</span>
-                <strong id="summary-safe-failures">0</strong>
-              </div>
-              <div class="summary-tile">
-                <span class="meta-label">Hallucinated Recommendations</span>
-                <strong id="summary-hallucinations">0</strong>
-              </div>
-            </div>
-            <div id="validation-results" class="validation-grid"></div>
+            <div id="fanout-status" class="inline-status"></div>
+            <div id="fanout-results" class="fanout-list"></div>
+            <p class="advisory-note">Advisory only, grounded in CPIC. Datum does not diagnose or prescribe; the prescriber makes the final decision.</p>
           </section>
 
-          <section class="card">
+          <section class="card" id="evidence-card" hidden>
             <div class="section-heading">
               <div>
-                <p class="section-kicker">3. Evidence Match</p>
-                <h2>CPIC evidence cards</h2>
+                <p class="section-kicker">Evidence</p>
+                <h2>CPIC gene–drug guidance</h2>
               </div>
               <span id="source-badge" class="status-badge">Awaiting lookup</span>
             </div>
             <div id="result-status" class="inline-status"></div>
             <div id="recommendation-cards" class="stack"></div>
-            <div id="empty-state" class="empty-state">
-              Run a medication lookup to see gene-drug evidence.
+            <div id="empty-state" class="empty-state" hidden>
+              Run a medication review to see gene–drug evidence.
             </div>
           </section>
 
-          <section class="card">
+          <section class="card" id="interpretation-card" hidden>
             <div class="section-heading">
               <div>
-                <p class="section-kicker">4. Clinical Interpretation</p>
-                <h2>Grounded summary</h2>
+                <p class="section-kicker">Clinical interpretation</p>
+                <h2>For the prescriber</h2>
               </div>
             </div>
-            <div id="doctor-summary" class="summary-box muted">
-              No summary yet.
-            </div>
+            <div id="doctor-summary" class="summary-box">No interpretation yet.</div>
           </section>
 
-          <section class="card">
-            <div class="section-heading">
-              <div>
-                <p class="section-kicker">5. Patient Explanation</p>
-                <h2>Patient-friendly wording</h2>
+          <div class="two-col">
+            <section class="card" id="patient-card" hidden>
+              <div class="section-heading">
+                <div>
+                  <p class="section-kicker">Plain-language note</p>
+                  <h2>For the patient</h2>
+                </div>
               </div>
-            </div>
-            <div id="patient-summary" class="summary-box muted">
-              No explanation yet.
-            </div>
-          </section>
+              <div id="patient-summary" class="summary-box">No note yet.</div>
+            </section>
 
-          <section class="card">
-            <div class="section-heading">
-              <div>
-                <p class="section-kicker">6. Follow-up Plan</p>
-                <h2>Next clinical checks</h2>
+            <section class="card" id="followup-card" hidden>
+              <div class="section-heading">
+                <div>
+                  <p class="section-kicker">Follow-up</p>
+                  <h2>Next clinical checks</h2>
+                </div>
               </div>
-            </div>
-            <div id="follow-up-summary" class="summary-box muted">
-              No follow-up plan yet.
-            </div>
-          </section>
-        </section>
+              <div id="follow-up-summary" class="summary-box">No follow-up plan yet.</div>
+            </section>
+          </div>
 
-        <aside class="side-column">
-          <section class="card side-card">
-            <p class="section-kicker">Evidence Mode</p>
-            <h2>Raw CPIC fields used</h2>
-            <div id="evidence-mode" class="code-panel">No evidence loaded.</div>
-          </section>
+          <details class="dev-panel">
+            <summary>
+              <span>Developer &amp; source view</span>
+              <span class="dev-hint">backend validation suite and raw CPIC fields</span>
+            </summary>
+            <div class="dev-body">
+              <div class="section-heading">
+                <div>
+                  <p class="section-kicker">Validation</p>
+                  <h2>Multi-case backend verification</h2>
+                </div>
+                <button id="run-validation" class="secondary-button" type="button">Run validation suite</button>
+              </div>
+              <div id="validation-status" class="inline-status">
+                Run the suite to prove the workflow holds across many cases, not just one demo.
+              </div>
+              <div id="validation-summary" class="validation-summary">
+                <div class="summary-tile">
+                  <span class="meta-label">Passed</span>
+                  <strong id="summary-pass-rate">0 / 0 tests passed</strong>
+                </div>
+                <div class="summary-tile">
+                  <span class="meta-label">Live CPIC results</span>
+                  <strong id="summary-live-count">0</strong>
+                </div>
+                <div class="summary-tile">
+                  <span class="meta-label">Safe failures</span>
+                  <strong id="summary-safe-failures">0</strong>
+                </div>
+                <div class="summary-tile">
+                  <span class="meta-label">Hallucinated recommendations</span>
+                  <strong id="summary-hallucinations">0</strong>
+                </div>
+              </div>
+              <div id="validation-results" class="validation-grid"></div>
 
-          <section class="card side-card">
-            <p class="section-kicker">Safety</p>
-            <h2>Guardrails</h2>
-            <ul class="guardrail-list">
-              <li>Clinical decision support only. Final decision remains with the physician.</li>
-              <li>No diagnosis or prescribing claims are made in this demo.</li>
-              <li>Summaries are grounded only in retrieved CPIC data or clearly labeled fallback demo data.</li>
-            </ul>
-          </section>
-        </aside>
-      </main>
+              <p class="section-kicker dev-subhead">Raw CPIC fields used</p>
+              <div id="evidence-mode" class="code-panel">No evidence loaded.</div>
+            </div>
+          </details>
+        </main>
+      </div>
     </div>
 
+    <script src="/src/phenotype.js"></script>
     <script src="/app.js"></script>
   </body>
-  </html>
+</html>

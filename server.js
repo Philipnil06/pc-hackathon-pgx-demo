@@ -6,6 +6,7 @@ const {
   DEMO_PATIENT,
   FALLBACK_MODE_MESSAGE,
   FallbackError,
+  SUPPORTED_ANTIDEPRESSANTS,
   getMedicationWorkflow,
   runValidationSuite,
 } = require("./src/cpic");
@@ -15,6 +16,50 @@ const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "public")));
+// Expose the phenotype engine (src/phenotype.js) to the browser too.
+app.use("/src", express.static(path.join(__dirname, "src")));
+
+// Turn one CPIC workflow result into a single verdict level.
+// Mirrors the client logic in public/app.js so server and browser agree.
+// Anti-hallucination: no recommendation match -> "none", never fabricated.
+function deriveFanOutVerdict(result) {
+  const rec = result && result.recommendationMatches && result.recommendationMatches[0];
+  if (!rec) {
+    return { verdictLevel: "none", recommendationText: "No specific PGx guidance for this combination." };
+  }
+  const text = (rec.drugrecommendation || "").toLowerCase();
+  const avoid = /(antidepressant not predominantly|consider an alternative|select an alternative|avoid|is not recommended|use an alternative)/.test(text);
+  const adjust = /(lower starting dose|lower dose|reduc|slower titration|titrat|maximum recommended dose|50%|adjust|monitor)/.test(text);
+  if (avoid) return { verdictLevel: "alert", recommendationText: rec.drugrecommendation };
+  if (adjust) return { verdictLevel: "caution", recommendationText: rec.drugrecommendation };
+  return { verdictLevel: "ok", recommendationText: rec.drugrecommendation };
+}
+
+const RANK_WEIGHT = { ok: 0, caution: 1, alert: 2, none: 3 };
+const RANK_LABEL = {
+  ok: "Preferred",
+  caution: "Use with caution",
+  alert: "Alternative advised",
+  none: "No specific guidance",
+};
+
+function summarizeDrug(drug, result, fallbackUsed) {
+  const rec = result && result.recommendationMatches && result.recommendationMatches[0];
+  const { verdictLevel, recommendationText } = deriveFanOutVerdict(result);
+  const gene = result && result.matchedGene ? result.matchedGene : null;
+  const phenotype = rec && gene ? (rec.lookupkey && rec.lookupkey[gene]) || (rec.phenotypes && rec.phenotypes[gene]) || null : null;
+  return {
+    drug,
+    verdictLevel,
+    rankLabel: RANK_LABEL[verdictLevel],
+    classification: rec ? rec.classification || null : null,
+    gene,
+    phenotype,
+    recommendationText,
+    guidelineUrl: (result && result.guideline && result.guideline.url) || null,
+    fallbackUsed: Boolean(fallbackUsed),
+  };
+}
 
 app.use((error, _req, res, next) => {
   if (error instanceof SyntaxError && error.status === 400 && "body" in error) {
@@ -99,6 +144,59 @@ app.post("/api/evaluate", async (req, res) => {
       data: error.data || null,
     });
   }
+});
+
+app.post("/api/fan-out", async (req, res) => {
+  const {
+    phenotypeMap,
+    patientContext = null,
+    population = DEFAULT_POPULATION,
+  } = req.body || {};
+
+  if (!phenotypeMap || typeof phenotypeMap !== "object" || Array.isArray(phenotypeMap)) {
+    return res.status(400).json({ error: "phenotypeMap (gene -> phenotype) is required." });
+  }
+
+  // Fan out across every supported antidepressant. One drug failing (or the
+  // CPIC API degrading to fallback) must never sink the whole panel.
+  const rows = await Promise.all(
+    SUPPORTED_ANTIDEPRESSANTS.map(async (drug) => {
+      try {
+        const result = await getMedicationWorkflow({
+          drugQuery: drug,
+          phenotypeMap,
+          population,
+          patientContext,
+        });
+        return summarizeDrug(drug, result, false);
+      } catch (error) {
+        if (error instanceof FallbackError) {
+          return summarizeDrug(drug, error.data || {}, true);
+        }
+        return summarizeDrug(drug, {}, false);
+      }
+    }),
+  );
+
+  const ranked = rows
+    .sort((a, b) => {
+      const weight = RANK_WEIGHT[a.verdictLevel] - RANK_WEIGHT[b.verdictLevel];
+      return weight !== 0 ? weight : a.drug.localeCompare(b.drug);
+    })
+    .map((row, index) => ({ ...row, rank: index + 1 }));
+
+  const summary = ranked.reduce(
+    (acc, row) => ((acc[row.verdictLevel] = (acc[row.verdictLevel] || 0) + 1), acc),
+    { ok: 0, caution: 0, alert: 0, none: 0 },
+  );
+
+  return res.json({
+    population,
+    phenotypeMap,
+    summary,
+    anyFallbackUsed: ranked.some((row) => row.fallbackUsed),
+    results: ranked,
+  });
 });
 
 app.post("/api/validation-suite", async (_req, res) => {
