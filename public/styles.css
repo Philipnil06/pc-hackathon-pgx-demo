@@ -810,9 +810,229 @@ a {
   color: var(--alert-text);
 }
 
+/* Hero band */
+.hero-band {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 28px 28px 4px;
+}
+
+.hero-band h1 {
+  margin: 0 0 12px;
+  font-size: clamp(1.5rem, 3vw, 2.2rem);
+  line-height: 1.15;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  max-width: 22ch;
+}
+
+.hero-sub {
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: 1rem;
+  line-height: 1.6;
+  max-width: 72ch;
+}
+
+.hero-flow {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--accent-strong);
+  font-weight: 600;
+}
+
+.hero-flow strong {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+/* Fan-out call to action */
+.fanout-cta {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.primary-button.wide {
+  padding: 13px 22px;
+}
+
+.fanout-cta-note {
+  font-size: 0.84rem;
+  color: var(--muted);
+}
+
+/* Fan-out ranked list */
+.fanout-list {
+  display: grid;
+  gap: 10px;
+}
+
+.fanout-row {
+  display: grid;
+  grid-template-columns: 28px 32px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid var(--border);
+  border-left-width: 4px;
+  border-radius: 12px;
+  padding: 12px 14px;
+  background: var(--panel);
+}
+
+.fanout-rank {
+  font-weight: 700;
+  color: var(--faint);
+  font-size: 0.9rem;
+  text-align: center;
+}
+
+.fanout-icon {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  font-weight: 700;
+  color: #fff;
+  font-size: 1rem;
+}
+
+.fanout-drug {
+  font-weight: 700;
+  text-transform: capitalize;
+  font-size: 0.98rem;
+}
+
+.fanout-rec {
+  margin-top: 3px;
+  font-size: 0.84rem;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.fanout-side {
+  text-align: right;
+  display: grid;
+  gap: 3px;
+}
+
+.fanout-label {
+  font-weight: 700;
+  font-size: 0.8rem;
+}
+
+.fanout-gene {
+  font-size: 0.74rem;
+  color: var(--faint);
+}
+
+.fanout-row.level-ok { border-left-color: var(--ok-text); }
+.fanout-row.level-ok .fanout-icon { background: var(--ok-text); }
+.fanout-row.level-ok .fanout-label { color: var(--ok-text); }
+.fanout-row.level-caution { border-left-color: var(--caution-text); }
+.fanout-row.level-caution .fanout-icon { background: var(--caution-text); }
+.fanout-row.level-caution .fanout-label { color: var(--caution-text); }
+.fanout-row.level-alert { border-left-color: var(--alert-text); }
+.fanout-row.level-alert .fanout-icon { background: var(--alert-text); }
+.fanout-row.level-alert .fanout-label { color: var(--alert-text); }
+.fanout-row.level-none { border-left-color: var(--neutral-border); }
+.fanout-row.level-none .fanout-icon { background: var(--neutral-text); }
+.fanout-row.level-none .fanout-label { color: var(--neutral-text); }
+
+.advisory-note {
+  margin: 14px 0 0;
+  font-size: 0.78rem;
+  color: var(--faint);
+  font-style: italic;
+}
+
+/* Genotype ingestion */
+.genotype-ingest .ingest-help {
+  color: var(--muted);
+  font-size: 0.85rem;
+  margin: 10px 0 12px;
+  line-height: 1.55;
+}
+
+.genotype-ingest code {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 1px 5px;
+  font-size: 0.82rem;
+}
+
+.ingest-samples {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.ingest-field textarea {
+  width: 100%;
+  font-family: "SFMono-Regular", "Roboto Mono", monospace;
+  font-size: 0.85rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  padding: 10px;
+  background: var(--card);
+  color: var(--text);
+  resize: vertical;
+}
+
+.ingest-actions {
+  display: flex;
+  gap: 10px;
+  margin: 12px 0;
+}
+
+.ingest-report {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.ingest-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid var(--border);
+  border-left-width: 3px;
+  border-radius: 10px;
+  padding: 8px 12px;
+  font-size: 0.85rem;
+}
+
+.ingest-row-ok { border-left-color: var(--ok-text); }
+.ingest-row-unknown { border-left-color: var(--caution-text); }
+.ingest-row-error { border-left-color: var(--alert-text); color: var(--muted); }
+
+.ingest-provenance {
+  margin-left: auto;
+  font-size: 0.7rem;
+  letter-spacing: 0.04em;
+  color: var(--faint);
+  text-transform: uppercase;
+}
+
 @media (max-width: 980px) {
   .workspace {
     grid-template-columns: 1fr;
+  }
+  .fanout-row {
+    grid-template-columns: 24px 28px minmax(0, 1fr);
+  }
+  .fanout-side {
+    grid-column: 1 / -1;
+    text-align: left;
   }
   .worklist {
     position: static;

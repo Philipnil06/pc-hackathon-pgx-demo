@@ -105,6 +105,19 @@ const elements = {
   summaryLiveCount: document.getElementById("summary-live-count"),
   summarySafeFailures: document.getElementById("summary-safe-failures"),
   summaryHallucinations: document.getElementById("summary-hallucinations"),
+  genomicsSourceBadge: document.getElementById("genomics-source-badge"),
+  genotypeIngest: document.getElementById("genotype-ingest"),
+  genotypeInput: document.getElementById("genotype-input"),
+  genotypeParse: document.getElementById("genotype-parse"),
+  genotypeFile: document.getElementById("genotype-file"),
+  genotypeFileTrigger: document.getElementById("genotype-file-trigger"),
+  genotypeIngestStatus: document.getElementById("genotype-ingest-status"),
+  genotypeIngestReport: document.getElementById("genotype-ingest-report"),
+  runFanout: document.getElementById("run-fanout"),
+  fanoutCard: document.getElementById("fanout-card"),
+  fanoutSummary: document.getElementById("fanout-summary"),
+  fanoutStatus: document.getElementById("fanout-status"),
+  fanoutResults: document.getElementById("fanout-results"),
 };
 
 function setBusy(button, busy, text) {
@@ -178,6 +191,14 @@ function selectPatient(patientId) {
       input.value = match ? match.phenotype : "";
     }
   });
+
+  if (elements.genomicsSourceBadge) {
+    elements.genomicsSourceBadge.textContent = "Source: clinical lab panel";
+  }
+  if (elements.genotypeIngestStatus) {
+    setStatus(elements.genotypeIngestStatus, "");
+    elements.genotypeIngestReport.innerHTML = "";
+  }
 
   resetResults();
   renderRoster();
@@ -317,6 +338,7 @@ function resetResults() {
   elements.interpretationCard.hidden = true;
   elements.patientCard.hidden = true;
   elements.followupCard.hidden = true;
+  elements.fanoutCard.hidden = true;
   setStatus(elements.resultStatus, "");
   setStatus(elements.searchStatus, "");
   elements.drugResults.innerHTML = "";
@@ -621,6 +643,272 @@ async function runValidationSuite() {
   }
 }
 
+/* ---------- Genotype ingestion (raw diplotype -> computed phenotype) ----------
+   Anti-hallucination contract: this layer NEVER invents a phenotype. It extracts
+   {gene, diplotype} pairs and asks src/phenotype.js to compute. Any allele the
+   engine can't map is surfaced as a safe-fail, never guessed. */
+
+const GENOTYPE_SAMPLES = {
+  anna: "# Synthetic lab report — Anna Bergström (MRN-100482)\nCYP2C19\t*2/*2\nCYP2D6\t*1/*1\nCYP2B6\t*1/*6\n",
+  erik: "# Synthetic lab report — Erik Lindqvist (MRN-100517)\nCYP2D6\t*4/*4\nCYP2C19\t*1/*1\n",
+  sofia: "# Synthetic lab report — Sofia Nilsson (MRN-100623)\nCYP2C19\t*17/*17\nCYP2D6\t*1/*2\n",
+};
+
+function normalizeGeneToken(raw) {
+  const key = String(raw || "").toUpperCase().replace(/[\s_]+/g, "");
+  return genes.includes(key) ? key : null;
+}
+
+function normalizeDiplotypeToken(raw) {
+  const cleaned = String(raw || "").replace(/\s+/g, "");
+  return /^\*[0-9A-Za-z]+(\/\*[0-9A-Za-z]+)$/.test(cleaned) ? cleaned : null;
+}
+
+function extractDiplotypes(rawText) {
+  const text = String(rawText || "").trim();
+  if (!text) {
+    return { pairs: [], errors: ["No genotype text provided."] };
+  }
+
+  if (text[0] === "{" || text[0] === "[") {
+    try {
+      const json = JSON.parse(text);
+      const list = Array.isArray(json?.genotypes) ? json.genotypes : null;
+      const pairs = [];
+      const errors = [];
+      const seen = new Set();
+      const push = (g, d) => {
+        const gene = normalizeGeneToken(g);
+        const diplotype = normalizeDiplotypeToken(d);
+        if (!gene) return errors.push(`Unsupported gene "${g}".`);
+        if (!diplotype) return errors.push(`Bad diplotype "${d}" for ${g}.`);
+        if (!seen.has(gene)) { seen.add(gene); pairs.push({ gene, diplotype }); }
+      };
+      if (list) list.forEach((entry) => push(entry.gene, entry.diplotype));
+      else Object.entries(json).forEach(([g, d]) => push(g, d));
+      return { pairs, errors };
+    } catch (_e) {
+      return { pairs: [], errors: ["File looks like JSON but could not be parsed."] };
+    }
+  }
+
+  const pairs = [];
+  const errors = [];
+  const seen = new Set();
+  text.split(/\r?\n/).forEach((line) => {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#") || trimmed.startsWith("//")) return;
+    const tokens = trimmed.split(/[\t,;:]|\s+/).filter(Boolean);
+    if (tokens.length < 2) return errors.push(`Could not read "${trimmed}" (expected: GENE  *x/*y).`);
+    const gene = normalizeGeneToken(tokens[0]);
+    const diplotype = normalizeDiplotypeToken(tokens.slice(1).join(""));
+    if (!gene) return errors.push(`Unsupported gene in "${trimmed}". Datum covers ${genes.join(", ")}.`);
+    if (!diplotype) return errors.push(`Could not read a diplotype in "${trimmed}" (expected star alleles, e.g. *2/*2).`);
+    if (seen.has(gene)) return;
+    seen.add(gene);
+    pairs.push({ gene, diplotype });
+  });
+  return { pairs, errors };
+}
+
+function computePhenotypes(pairs) {
+  const fn = window.DatumPhenotype && window.DatumPhenotype.diplotypeToPhenotype;
+  if (typeof fn !== "function") {
+    return { computed: [], unmapped: [], moduleMissing: true };
+  }
+  const computed = [];
+  const unmapped = [];
+  pairs.forEach(({ gene, diplotype }) => {
+    let res = null;
+    try {
+      res = fn(gene, diplotype);
+    } catch (_e) {
+      res = null;
+    }
+    const phenotype = res && res.phenotype ? res.phenotype : null;
+    if (phenotype) {
+      computed.push({ gene, diplotype, phenotype });
+    } else {
+      unmapped.push({ gene, diplotype, reason: (res && res.reason) || "Allele not recognized." });
+    }
+  });
+  return { computed, unmapped, moduleMissing: false };
+}
+
+function applyComputedGenotypes(computed) {
+  const genotypesForChips = [];
+  genes.forEach((gene) => {
+    const hit = computed.find((c) => c.gene === gene);
+    const input = document.getElementById(`gene-${gene}`);
+    if (input && hit) {
+      input.value = hit.phenotype;
+    }
+    if (hit) {
+      genotypesForChips.push({ gene, diplotype: hit.diplotype, phenotype: hit.phenotype });
+    }
+  });
+
+  state.patientMeta = {
+    ...state.patientMeta,
+    id: state.patientMeta.id || "Uploaded genotype",
+    genotypes: genotypesForChips.length ? genotypesForChips : state.patientMeta.genotypes,
+  };
+
+  if (elements.genomicsSourceBadge) {
+    elements.genomicsSourceBadge.textContent = "Source: computed by Datum from raw genotype";
+  }
+  renderGenotypeChips();
+  renderPatientBanner();
+  resetResults();
+}
+
+function renderIngestReport({ computed, unmapped, errors }) {
+  const rows = [];
+  computed.forEach((c) => {
+    rows.push(`
+      <div class="ingest-row ingest-row-ok">
+        <span class="chip-gene">${escapeHtml(c.gene)}</span>
+        <span class="chip-diplotype">${escapeHtml(c.diplotype)} <span class="chip-arrow">→</span></span>
+        <span class="chip-phenotype">${escapeHtml(c.phenotype)}</span>
+        <span class="ingest-provenance">computed by Datum</span>
+      </div>`);
+  });
+  unmapped.forEach((u) => {
+    rows.push(`
+      <div class="ingest-row ingest-row-unknown">
+        <span class="chip-gene">${escapeHtml(u.gene)}</span>
+        <span class="chip-diplotype">${escapeHtml(u.diplotype)}</span>
+        <span class="ingest-provenance">not recognized — enter this phenotype manually below</span>
+      </div>`);
+  });
+  (errors || []).forEach((e) => {
+    rows.push(`<div class="ingest-row ingest-row-error">${escapeHtml(e)}</div>`);
+  });
+  elements.genotypeIngestReport.innerHTML = rows.join("");
+}
+
+function runGenotypeIngestion() {
+  const { pairs, errors } = extractDiplotypes(elements.genotypeInput.value);
+
+  if (!pairs.length) {
+    setStatus(elements.genotypeIngestStatus, errors[0] || "Could not read any genotype. Expected lines like: CYP2C19  *2/*2", "flag-error");
+    renderIngestReport({ computed: [], unmapped: [], errors });
+    return;
+  }
+
+  const { computed, unmapped, moduleMissing } = computePhenotypes(pairs);
+
+  if (moduleMissing) {
+    setStatus(elements.genotypeIngestStatus, "Phenotype engine not loaded. Enter phenotypes manually below.", "flag-error");
+    renderIngestReport({ computed: [], unmapped: pairs.map((p) => ({ ...p })), errors });
+    return;
+  }
+
+  if (computed.length) {
+    applyComputedGenotypes(computed);
+  }
+
+  if (unmapped.length) {
+    const which = unmapped.map((u) => `${u.gene} ${u.diplotype}`).join(", ");
+    setStatus(
+      elements.genotypeIngestStatus,
+      computed.length
+        ? `Computed ${computed.length} phenotype(s). Could not map: ${which}. Enter those manually below.`
+        : `No diplotype could be mapped (${which}). Enter the phenotype manually below.`,
+      "flag-fallback",
+    );
+  } else {
+    setStatus(elements.genotypeIngestStatus, `Computed ${computed.length} phenotype(s) from the raw genotype. Values applied above.`, "flag-live");
+  }
+  renderIngestReport({ computed, unmapped, errors });
+}
+
+function loadGenotypeSample(key) {
+  const sample = GENOTYPE_SAMPLES[key];
+  if (!sample) return;
+  elements.genotypeInput.value = sample;
+  elements.genotypeIngest.open = true;
+  setStatus(elements.genotypeIngestStatus, "Sample loaded. Press Compute phenotypes.", "");
+  elements.genotypeIngestReport.innerHTML = "";
+}
+
+/* ---------- Multi-drug fan-out ---------- */
+
+const FANOUT_ICON = { ok: "✓", caution: "!", alert: "!", none: "–" };
+
+async function runFanout() {
+  const payload = collectPayload();
+  if (!Object.keys(payload.phenotypeMap).length) {
+    elements.fanoutCard.hidden = false;
+    setStatus(elements.fanoutStatus, "Enter or compute at least one gene phenotype first.", "flag-error");
+    elements.fanoutResults.innerHTML = "";
+    return;
+  }
+
+  setBusy(elements.runFanout, true, "Ranking...");
+  elements.fanoutCard.hidden = false;
+  setStatus(elements.fanoutStatus, "Checking every supported antidepressant against this genotype...");
+
+  try {
+    const response = await fetch("/api/fan-out", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        phenotypeMap: payload.phenotypeMap,
+        patientContext: {
+          patientName: payload.patientName,
+          age: payload.age,
+          condition: payload.condition,
+          previousIssue: payload.previousIssue,
+        },
+      }),
+    });
+    const data = await response.json();
+    renderFanout(data);
+  } catch (_error) {
+    setStatus(elements.fanoutStatus, "Ranking failed.", "flag-error");
+  } finally {
+    setBusy(elements.runFanout, false);
+  }
+}
+
+function renderFanout(data) {
+  const results = (data && data.results) || [];
+  if (!results.length) {
+    setStatus(elements.fanoutStatus, "No results returned.", "flag-error");
+    elements.fanoutResults.innerHTML = "";
+    return;
+  }
+
+  const s = data.summary || {};
+  elements.fanoutSummary.textContent = `${s.ok || 0} preferred · ${s.caution || 0} caution · ${s.alert || 0} alternative · ${s.none || 0} no guidance`;
+  setStatus(
+    elements.fanoutStatus,
+    data.anyFallbackUsed ? "Some rows used fallback demo data (live CPIC unavailable)." : "Live CPIC guidance retrieved for the full panel.",
+    data.anyFallbackUsed ? "flag-fallback" : "flag-live",
+  );
+
+  elements.fanoutResults.innerHTML = results
+    .map((row) => {
+      const geneLine =
+        row.gene && row.phenotype ? `${escapeHtml(row.gene)}: ${escapeHtml(row.phenotype)}` : "No matched gene";
+      return `
+        <article class="fanout-row level-${row.verdictLevel}">
+          <span class="fanout-rank">${row.rank}</span>
+          <span class="fanout-icon">${FANOUT_ICON[row.verdictLevel] || "–"}</span>
+          <div class="fanout-main">
+            <div class="fanout-drug">${escapeHtml(row.drug)}</div>
+            <div class="fanout-rec">${escapeHtml(row.recommendationText || "")}</div>
+          </div>
+          <div class="fanout-side">
+            <span class="fanout-label">${escapeHtml(row.rankLabel || "")}</span>
+            <span class="fanout-gene">${geneLine}${row.fallbackUsed ? " · fallback" : ""}</span>
+          </div>
+        </article>`;
+    })
+    .join("");
+}
+
 /* ---------- Wire up ---------- */
 
 [elements.patientName, elements.age, elements.condition, elements.previousIssue].forEach((input) => {
@@ -638,6 +926,24 @@ genes.forEach((gene) => {
 elements.searchDrug.addEventListener("click", searchDrug);
 elements.runEvaluation.addEventListener("click", runEvaluation);
 elements.runValidation.addEventListener("click", runValidationSuite);
+elements.runFanout.addEventListener("click", runFanout);
+
+elements.genotypeParse.addEventListener("click", runGenotypeIngestion);
+elements.genotypeFileTrigger.addEventListener("click", () => elements.genotypeFile.click());
+elements.genotypeFile.addEventListener("change", () => {
+  const file = elements.genotypeFile.files && elements.genotypeFile.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    elements.genotypeInput.value = reader.result;
+    elements.genotypeIngest.open = true;
+    setStatus(elements.genotypeIngestStatus, `Loaded ${file.name}. Press Compute phenotypes.`, "");
+  };
+  reader.readAsText(file);
+});
+elements.genotypeIngest.querySelectorAll("[data-sample]").forEach((btn) => {
+  btn.addEventListener("click", () => loadGenotypeSample(btn.dataset.sample));
+});
 
 renderRoster();
 loadConfig().then(() => selectPatient(PATIENTS[0].id));

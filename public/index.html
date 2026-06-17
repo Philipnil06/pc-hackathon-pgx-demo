@@ -25,6 +25,19 @@
         </div>
       </header>
 
+      <section class="hero-band">
+        <h1>The right antidepressant, without the months of trial and error</h1>
+        <p class="hero-sub">
+          Finding a medication that works can take months of guesswork, because people
+          metabolize drugs differently depending on their genes. Datum reads a patient's
+          pharmacogenomic profile and shows which antidepressants fit, grounded in published CPIC guidance.
+        </p>
+        <p class="hero-flow">
+          Genotype <span aria-hidden="true">→</span> computed phenotype <span aria-hidden="true">→</span> ranked guidance across every drug.
+          <strong>Advisory only. It does not diagnose or prescribe.</strong>
+        </p>
+      </section>
+
       <div class="workspace">
         <aside class="worklist">
           <p class="panel-kicker">Patient worklist</p>
@@ -52,9 +65,36 @@
                 <p class="section-kicker">Pharmacogenomic profile</p>
                 <h2>Lab-reported genotype</h2>
               </div>
-              <span class="status-badge subtle">Source: clinical lab panel</span>
+              <span id="genomics-source-badge" class="status-badge subtle">Source: clinical lab panel</span>
             </div>
             <div id="genotype-chips" class="chips"></div>
+
+            <details class="inline-edit genotype-ingest" id="genotype-ingest">
+              <summary>Upload or paste a raw genotype (Datum computes the phenotype)</summary>
+              <p class="ingest-help">
+                Paste lab-reported star-allele diplotypes, one gene per line
+                (e.g. <code>CYP2C19&#9;*2/*2</code>). Datum maps each diplotype to a
+                metabolizer phenotype using published CPIC allele tables. Nothing is entered by hand.
+              </p>
+              <div class="ingest-samples">
+                <span class="meta-label">Load a sample report</span>
+                <button class="secondary-button" type="button" data-sample="anna">Anna · CYP2C19 *2/*2</button>
+                <button class="secondary-button" type="button" data-sample="erik">Erik · CYP2D6 *4/*4</button>
+                <button class="secondary-button" type="button" data-sample="sofia">Sofia · CYP2C19 *17/*17</button>
+              </div>
+              <label class="ingest-field">
+                Raw genotype
+                <textarea id="genotype-input" rows="5" spellcheck="false" placeholder="CYP2C19&#9;*2/*2&#10;CYP2D6&#9;*1/*1"></textarea>
+              </label>
+              <div class="ingest-actions">
+                <input id="genotype-file" type="file" accept=".txt,.json,.tsv,.csv" hidden />
+                <button id="genotype-file-trigger" class="secondary-button" type="button">Choose file…</button>
+                <button id="genotype-parse" class="primary-button" type="button">Compute phenotypes</button>
+              </div>
+              <div id="genotype-ingest-status" class="inline-status"></div>
+              <div id="genotype-ingest-report" class="ingest-report"></div>
+            </details>
+
             <details class="inline-edit">
               <summary>Edit patient &amp; genomic values</summary>
               <div class="form-grid three-up">
@@ -109,9 +149,28 @@
             </div>
             <div id="search-status" class="inline-status"></div>
             <div id="drug-results" class="simple-list"></div>
+            <div class="fanout-cta">
+              <button id="run-fanout" class="primary-button wide" type="button">
+                Rank all antidepressants for this patient
+              </button>
+              <span class="fanout-cta-note">Checks every supported drug against this genotype at once.</span>
+            </div>
           </section>
 
           <section id="verdict" class="verdict" hidden></section>
+
+          <section class="card" id="fanout-card" hidden>
+            <div class="section-heading">
+              <div>
+                <p class="section-kicker">Genotype-guided ranking</p>
+                <h2>Antidepressants ranked for this patient</h2>
+              </div>
+              <span id="fanout-summary" class="status-badge subtle"></span>
+            </div>
+            <div id="fanout-status" class="inline-status"></div>
+            <div id="fanout-results" class="fanout-list"></div>
+            <p class="advisory-note">Advisory only, grounded in CPIC. Datum does not diagnose or prescribe; the prescriber makes the final decision.</p>
+          </section>
 
           <section class="card" id="evidence-card" hidden>
             <div class="section-heading">
@@ -204,6 +263,7 @@
       </div>
     </div>
 
+    <script src="/src/phenotype.js"></script>
     <script src="/app.js"></script>
   </body>
 </html>

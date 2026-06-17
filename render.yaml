@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: datum-pgx
+    runtime: node
+    plan: free
+    region: oregon
+    buildCommand: npm install
+    startCommand: node server.js
+    healthCheckPath: /api/config
+    autoDeploy: true
