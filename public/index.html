@@ -26,14 +26,16 @@
       </header>
 
       <section class="hero-band">
-        <h1>The right antidepressant, without the months of trial and error</h1>
+        <h1>Choose and start an antidepressant with less guesswork</h1>
         <p class="hero-sub">
-          Finding a medication that works can take months of guesswork, because people
-          metabolize drugs differently depending on their genes. Datum reads a patient's
-          pharmacogenomic profile and shows which antidepressants fit, grounded in published CPIC guidance.
+          Datum is a clinical decision support that brings three things together in one view:
+          the patient's symptom picture, their current medications and interaction risks, and
+          their pharmacogenetics. It does not pick the drug for you. It narrows the field and
+          flags the risks, so the choice is safer and easier to defend.
         </p>
         <p class="hero-flow">
-          Genotype <span aria-hidden="true">→</span> computed phenotype <span aria-hidden="true">→</span> ranked guidance across every drug.
+          Symptom profile <span aria-hidden="true">→</span> current medications <span aria-hidden="true">→</span>
+          genetics as a safety filter <span aria-hidden="true">→</span> one short, sourced recommendation.
           <strong>Advisory only. It does not diagnose or prescribe.</strong>
         </p>
       </section>
@@ -59,11 +61,33 @@
             <p>Select a patient from the worklist to open their pharmacogenomic chart.</p>
           </section>
 
+          <section class="card" id="clinical-profile-card">
+            <div class="section-heading">
+              <div>
+                <p class="section-kicker">Step 1 · Clinical picture</p>
+                <h2>Symptom profile and current medications</h2>
+              </div>
+            </div>
+            <p class="layer-help">The clinical picture comes first. Genetics is applied as a safety filter afterwards, not as the chooser.</p>
+            <p class="meta-label">Symptom profile</p>
+            <div id="symptom-options" class="symptom-grid"></div>
+            <label class="meds-field">
+              Current medications (one per line, or comma separated)
+              <textarea id="current-meds" rows="3" spellcheck="false" placeholder="e.g.&#10;tramadol&#10;omeprazole&#10;warfarin"></textarea>
+            </label>
+            <div class="ingest-samples">
+              <span class="meta-label">Load example meds</span>
+              <button class="secondary-button" type="button" data-meds="tramadol, omeprazole">serotonergic + CYP2C19 inhibitor</button>
+              <button class="secondary-button" type="button" data-meds="paroxetine, warfarin">CYP2D6 inhibitor + bleeding</button>
+              <button class="secondary-button" type="button" data-meds="">clear</button>
+            </div>
+          </section>
+
           <section class="card" id="genomics-card" hidden>
             <div class="section-heading">
               <div>
-                <p class="section-kicker">Pharmacogenomic profile</p>
-                <h2>Lab-reported genotype</h2>
+                <p class="section-kicker">Step 2 · Pharmacogenetic filter</p>
+                <h2>Genotype (safety and precision layer)</h2>
               </div>
               <span id="genomics-source-badge" class="status-badge subtle">Source: clinical lab panel</span>
             </div>
@@ -153,7 +177,7 @@
               <button id="run-fanout" class="primary-button wide" type="button">
                 Rank all antidepressants for this patient
               </button>
-              <span class="fanout-cta-note">Checks every supported drug against this genotype at once.</span>
+              <span class="fanout-cta-note">Weighs symptom profile, current medications, and genetics across all 7 drugs.</span>
             </div>
           </section>
 
@@ -162,14 +186,18 @@
           <section class="card" id="fanout-card" hidden>
             <div class="section-heading">
               <div>
-                <p class="section-kicker">Genotype-guided ranking</p>
+                <p class="section-kicker">Step 3 · Combined recommendation</p>
                 <h2>Antidepressants ranked for this patient</h2>
               </div>
               <span id="fanout-summary" class="status-badge subtle"></span>
             </div>
             <div id="fanout-status" class="inline-status"></div>
             <div id="fanout-results" class="fanout-list"></div>
-            <p class="advisory-note">Advisory only, grounded in CPIC. Datum does not diagnose or prescribe; the prescriber makes the final decision.</p>
+            <div id="clinical-note-block" hidden>
+              <p class="section-kicker">Journal-friendly note</p>
+              <pre id="clinical-note" class="clinical-note"></pre>
+            </div>
+            <p class="advisory-note">Each line weighs symptoms, interactions, and genetics together, grounded in FASS and CPIC. Genetics is a filter, never the sole driver. Datum does not diagnose or prescribe; the prescriber decides.</p>
           </section>
 
           <section class="card" id="evidence-card" hidden>
