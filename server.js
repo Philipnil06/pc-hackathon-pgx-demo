@@ -274,6 +274,12 @@ app.post("/api/validation-suite", async (_req, res) => {
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`PC Hackathon PGx demo running at http://localhost:${PORT}`);
-});
+// Only start a long-lived listener when run directly (local dev). On Vercel the
+// app is imported as a serverless handler (see api/index.js), so we export it.
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`PC Hackathon PGx demo running at http://localhost:${PORT}`);
+  });
+}
+
+module.exports = app;
