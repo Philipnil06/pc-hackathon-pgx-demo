@@ -1,95 +1,197 @@
 # Datum PGx
 
-**The right antidepressant, without the months of trial and error.**
-
-Datum reads a patient's pharmacogenomic genotype, computes their metabolizer phenotype, and ranks every supported antidepressant against published CPIC guidance. It is an advisory decision-support tool for clinicians. It does not diagnose or prescribe.
+A clinical decision support that helps a clinician choose and start an antidepressant
+more safely, by combining the symptom picture, the medication list, and pharmacogenetics
+in one short, traceable recommendation.
 
 ---
 
-## Problem
+## The problem
 
-Finding an antidepressant that works is mostly trial and error. A large share of patients cycle through two or three drugs over several months before landing on one that helps at a tolerable dose. Each failed trial is weeks of waiting for an effect, side effects that drive people to quit, and a depression that stays untreated the whole time.
+Antidepressant prescribing is largely trial and error. A clinician picks a first drug,
+waits four to six weeks to see if it helps, and often has to switch. Roughly half of
+patients do not respond adequately to their first antidepressant, so a second or third
+attempt is common. Each failed attempt is weeks of continued illness, side effects that
+drive people to stop, and lost trust.
 
-A real and measurable part of that failure is genetic. Genes like CYP2C19 and CYP2D6 control how fast the body breaks a drug down. A "poor metabolizer" can build up toxic levels at a standard dose. An "ultrarapid metabolizer" can clear the drug before it ever works. Today most prescribers cannot see this, so they dose by averages and adjust by trial.
+At the same time, antidepressants are prescribed at very high volume and that volume keeps
+rising. The pressure in primary care is to start something quickly in a short appointment,
+usually without the time to weigh symptom subtype, the patient's other medications, and
+their metabolism together. Two real risks follow. First, the wrong fit for the symptom
+picture, for example a sedating profile given to a fatigued patient. Second, avoidable harm
+from interactions, such as serotonergic combinations or a CYP inhibitor that quietly turns
+a normal metabolizer into a poor one.
 
-The information often already exists. Pharmacogenomic panels are increasingly ordered, but the result lands as a raw genotype the prescriber has to interpret by hand against dense guideline tables, drug by drug, at the moment of the visit. That step is where the evidence gets lost.
+The gap is not a lack of data. It is that symptom information, the medication list, and
+genetics live in separate places and are rarely combined at the moment of prescribing.
 
-## Solution
+## Validation, and the pivot it caused
 
-Datum sits exactly at that interpretation step. Give it a raw genotype and a clinical context, and it does three things:
+We did not build what we first imagined. Our original idea was genetics first: feed in a
+genotype and have the tool pick the right antidepressant. We took that idea to a specialist
+GP before writing the final version.
 
-1. **Computes the phenotype** from the patient's star-allele diplotype (for example, CYP2C19 \*2/\*2 becomes a poor metabolizer) using published CPIC allele-to-phenotype tables.
-2. **Fans the result across every supported antidepressant at once** instead of one lookup at a time.
-3. **Returns a ranked verdict** for each drug, each tied back to the CPIC recommendation that produced it.
+The feedback changed the product. The verdict was clear: a genetics-first tool that claims
+to pick the right drug is too narrow and loses clinician trust. Genes describe metabolism
+and drug exposure. They do not tell you which drug will work for this patient. A tool that
+leads with genetics is answering the wrong question, and a clinician can see that
+immediately.
 
-The prescriber sees, on one screen, which drugs are standard, which need a dose change, and which to avoid for this specific patient, with the source behind every call.
+So we pivoted. Datum is now a layered decision support with a clear priority order:
+symptoms first, interactions second, genetics as a filter on top. The same specialist
+pointed out the detail that makes this credible: a CYP inhibitor in the patient's current
+medication list can make a genetically normal metabolizer behave like a poor metabolizer.
+In other words, an interaction can matter more than the genotype. That is exactly why
+genetics cannot sit at the top of the stack.
 
-## How it works
+This is our proof of problem fit. We had a plausible idea, we put it in front of the person
+who would actually use it, and we let their judgement reshape the product before the
+buildathon clock ran out.
 
-```
-Raw genotype  ->  Computed phenotype  ->  Ranked CPIC guidance across all drugs
-CYP2C19 *2/*2     Poor Metabolizer        amitriptyline: caution / dose change
-                                          citalopram, escitalopram, sertraline,
-                                          paroxetine, venlafaxine, vortioxetine ...
-```
+## The solution: three layers, one recommendation
 
-- **Input:** a star-allele diplotype per gene plus a synthetic patient context. Supported genes today: CYP2C19, CYP2D6, CYP2B6.
-- **Phenotype engine:** maps diplotypes to metabolizer status using CPIC's published allele functionality and phenotype tables, the same logic a pharmacogenomics pharmacist applies by hand.
-- **Guidance engine:** queries the live CPIC API (api.cpicpgx.org) for the recommendation that matches that drug and phenotype.
-- **Output:** a ranked verdict across all seven supported antidepressants, each item carrying the CPIC source it came from.
+Datum evaluates each candidate drug through three layers, in this order.
 
-Supported antidepressants today: amitriptyline, citalopram, escitalopram, paroxetine, sertraline, venlafaxine, vortioxetine. All demo patients are synthetic. No real patient data is used.
+1. **Clinical symptom profile.** The starting point. Depression with insomnia, anxiety,
+   fatigue, weight concern, sexual side-effect concern, pain, or high suicide risk all point
+   toward or away from specific drugs. This is what decides whether a drug is a reasonable
+   fit at all.
 
-## Why it's credible
+2. **Current medications and interactions.** We check the patient's drug list for
+   serotonergic combinations, CYP2C19 and CYP2D6 inhibitors or inducers, QT risk, bleeding
+   risk, and sedation. This layer can override genetics, because phenoconversion from an
+   inhibitor can change real-world exposure more than a genotype does.
 
-Datum is built to be trusted by clinicians, which means it is built to refuse rather than guess.
+3. **Pharmacogenetics as a filter.** On top, not underneath. For CYP2C19, CYP2D6, and CYP2B6
+   we translate the patient's diplotype into a phenotype and turn that into a clear flag:
+   avoid, start low and go slow, standard, or risk of low exposure. Genetics is a safety and
+   precision layer, never the chooser.
 
-- **Source-grounded.** Every recommendation comes from the live CPIC API. CPIC is the established, peer-reviewed standard for translating pharmacogenetic results into prescribing guidance. Datum does not invent recommendations.
-- **Phenotype is computed, not assumed.** The genotype-to-phenotype step uses published CPIC allele tables, so the reasoning is transparent and checkable, not a black box.
-- **It never hallucinates.** The app has explicit anti-hallucination guardrails. It safe-fails on a drug it does not support, on a gene that is not relevant to the drug, and on a genotype it cannot resolve to a phenotype. When it cannot stand behind an answer, it says so instead of making one up.
-- **Honest about its boundaries.** Pharmacogenomics is one input. It does not account for drug interactions, organ function, prior response, or patient preference. Datum surfaces the genetic evidence and leaves the decision with the prescriber.
+The output is deliberately short. One recommendation per drug, ranked, each with a plain
+verdict, a one-line reason, and a citation. It is written to drop into the prescription flow
+and the journal, not to be a long genetic report no one reads.
 
-## Regulatory path
+## What is actually built (prototype)
 
-We are deliberate about what Datum is and is not.
+This is a working Node and Express app, not a slide.
 
-**Today: advisory only, clinician in the loop.** Datum presents published guidance to a qualified prescriber who makes the decision. It does not diagnose, does not prescribe, and does not act without a clinician. In this form it functions as a guideline-reference and workflow tool, with the human responsible for the clinical call.
+- A patient worklist and a genotype-ingestion flow that computes the phenotype from a
+  diplotype using our `phenotype.js` module.
+- `POST /api/evaluate` runs the three-layer workflow for a single drug.
+- `POST /api/fan-out` runs all seven supported drugs and returns a ranked list, each with a
+  verdict level of alert, caution, ok, or none, plus the recommendation text, the matched
+  gene, and the phenotype.
+- The frontend shows the verdict and the fan-out comparison so a clinician sees the whole
+  shortlist at once.
+- Scope is honest and bounded: seven antidepressants in common use (amitriptyline,
+  citalopram, escitalopram, paroxetine, sertraline, venlafaxine, vortioxetine) and three
+  genes (CYP2C19, CYP2D6, CYP2B6). Every rule is traceable to a source.
 
-**For real clinical deployment, the bar is higher, and we know it.** Software that interprets a patient's genetic result to drive a treatment decision is most likely a regulated medical device. In the United States that points to an FDA Class II clearance pathway (a 510(k)-style submission demonstrating substantial equivalence and analytical and clinical validity). In the European Union it falls under the In Vitro Diagnostic Regulation / Medical Device Regulation with the corresponding conformity assessment. That process requires validated allele calling, documented clinical evidence, quality management, and post-market surveillance.
+## Business model and paying customer
 
-**What we built is the workflow, not an unregulated prescribing tool.** The hard, defensible part of Datum is the genotype-to-phenotype-to-guidance engine and its guardrails. That engine is what a regulated product is built around. We are choosing to be the credible, source-grounded version of this rather than the fast, unaccountable one.
+Datum is a decision-support layer sold to the organisations that already run, or want to
+run, structured medication review.
 
-## Adoption wedge
+- **Pharmacist-led pharmacogenetics services.** These services already order PGx panels and
+  need a defensible, prescriber-friendly way to turn results into action. Datum is the
+  interpretation layer. This is the most natural first paying customer: a per-seat or
+  per-report subscription.
+- **Psychiatry clinics and primary-care groups.** They carry the trial-and-error cost
+  directly. We sell per-clinician seats with a clear pitch: fewer failed first attempts and
+  fewer avoidable interaction events.
+- **Journal and EHR integration.** The larger play. Because the output is one short,
+  structured, sourced line, it is built to sit inside the prescription flow of an existing
+  record system. That is a per-seat licence to the EHR vendor or the region, with much
+  higher reach.
 
-We do not need every clinic on day one. We need the people who already do this work by hand.
+Credible revenue path: land with one pharmacist-led PGx service as a paid pilot, prove fewer
+switches and cleaner interaction checks, then expand to primary-care groups, then license the
+engine into a journal or EHR for scale.
 
-- **Pharmacist-led pharmacogenomics services.** A growing number of pharmacies and health systems run PGx consult services. These pharmacists already interpret genotypes against CPIC, manually, drug by drug. Datum removes the slowest part of their workflow and speaks their exact vocabulary. They are the lowest-friction, highest-trust first adopter.
-- **Psychiatry clinics.** Antidepressant trial and error is felt most acutely in psychiatry, and CYP2C19 and CYP2D6 genotyping is already common there. The pain is sharp, the relevant genes are few, and the prescriber is motivated to shorten the path to a working drug.
+## Market and timing
 
-Both groups are clinician-led, evidence-driven, and already paying the cost Datum removes. That makes them the wedge.
+Sweden prescribes antidepressants at high and rising volume, with well over a million people
+on them, which makes even small improvements in first-choice quality meaningful at the
+population level. Pharmacogenetics is moving from research into routine care: panel costs have
+fallen, CPIC and equivalent bodies publish drug-gene guidance, and pharmacist-led PGx services
+are emerging. The missing piece is not the test, it is the decision support that puts the
+genetic result in clinical context at the moment of prescribing. That is the window Datum
+fits, and antidepressants are the highest-volume, best-evidenced place to start.
 
-## Market expansion
+## Why it is credible and safe
 
-Antidepressants are the demonstration wedge, not the ceiling.
+- **Rule-based, not a black box.** Every verdict comes from an explicit rule, not a model
+  guess. A clinician can see why.
+- **Traceable.** Each recommendation cites its source, FASS and CPIC, so it can be checked
+  and defended in the journal.
+- **Advisory only.** Datum informs the prescriber. It never diagnoses, never prescribes, and
+  is never the sole driver of a decision. The clinician decides.
+- **Honest regulatory path.** Advisory clinical decision support now. As we move toward
+  driving decisions more directly, we expect to fall under medical device rules, Class II and
+  the EU MDR, and we plan for that rather than around it.
 
-The engine underneath, genotype to computed phenotype to CPIC guidance with guardrails, is drug-class agnostic. CPIC publishes guidance well beyond psychiatry. The same pipeline extends to:
+## 2-minute pitch script, beat by beat
 
-- **Pain management** (for example, codeine and tramadol via CYP2D6), where metabolizer status changes both efficacy and overdose risk.
-- **Cardiology** (for example, clopidogrel via CYP2C19, warfarin, statins), where genotype-guided dosing already has strong guideline support.
-- **Oncology** (for example, thiopurines via TPMT, fluoropyrimidines via DPYD), where avoiding a toxic dose is life-or-death.
+**0:00 to 0:20. The hook.**
+"For most patients, the first antidepressant they are given does not work well enough. The
+clinician picks one, waits a month and a half, and often starts over. That is normal, and it
+costs patients weeks of illness."
 
-Each new class is a new set of genes and CPIC tables plugged into an engine that already exists. We prove the model on antidepressants, then expand drug class by drug class.
+**0:20 to 0:40. The real problem.**
+"Three things decide a good first choice: the symptom picture, the patient's other
+medications, and how they metabolise the drug. Today those live in three different places and
+almost never get combined in a short appointment."
 
-## 90-second demo script
+**0:40 to 1:05. The validation and the pivot. This is the heart.**
+"We first built this genetics first, a tool that picks the drug from your genes. We showed it
+to a specialist GP before we finished. He told us, plainly, that genetics first is too narrow
+and loses clinician trust, because genes tell you how you handle a drug, not whether it works.
+He also gave us the detail that proves it: a drug interaction can turn a genetically normal
+metabolizer into a poor one, so an interaction can matter more than the genotype. We pivoted."
 
-**0:00 - 0:15 — The pain.** "Imagine you're starting treatment for depression. The usual path is trial and error: try a drug, wait weeks, maybe it works, maybe the side effects are unbearable, try the next one. For a lot of people that's months. Part of why is genetic. Your genes decide how fast you break a drug down, and most prescribers can't see that."
+**1:05 to 1:35. The solution.**
+"Datum now works in the order a clinician actually thinks. Symptoms first, to decide what
+fits. Interactions second, because they can override everything else. Genetics on top, as a
+safety filter: avoid, start low, standard, or low exposure. The output is one short line,
+sourced to FASS and CPIC, ready to paste into the journal."
 
-**0:15 - 0:30 — The setup.** "This is Datum. We start with a synthetic patient and their raw genetic result, a genotype like CYP2C19 \*2/\*2. That's the kind of result a pharmacogenomic panel actually returns. Today a pharmacist would interpret this by hand, drug by drug."
+**1:35 to 1:55. Proof and ask.**
+"It is built and running: enter symptoms, medications, and genotype, and it ranks all seven
+common antidepressants with a clear verdict for each. It is rule-based and traceable, advisory
+only, never the sole decider."
 
-**0:30 - 0:50 — The core move.** "I paste the genotype and hit compute. First, Datum computes the phenotype from published CPIC allele tables. \*2/\*2 makes this patient a poor metabolizer. Then, instead of one lookup, it fans that across every supported antidepressant at once and ranks them." (Show the ranked list: standard, dose-change, avoid.)
+**1:55 to 2:00. Close.**
+"Datum makes the first antidepressant choice safer and easier to defend. We start with
+pharmacist-led PGx services and scale into the journal."
 
-**0:50 - 1:10 — Why you can trust it.** "Every line is pulled live from the CPIC API, the peer-reviewed standard, with the source attached. And watch this." (Enter a fake drug or an irrelevant gene.) "It refuses. It safe-fails instead of guessing. That's the whole point. A clinical tool has to know what it doesn't know."
+## Likely jury questions and answers
 
-**1:10 - 1:25 — The boundary and the wedge.** "Datum is advisory. A clinician makes the call. Our first users are the people already doing this by hand, pharmacist-led PGx services and psychiatry clinics. We remove their slowest step."
+**Q1. Is this not just another pharmacogenetics tool?**
+No, and that is the point of our pivot. A pure PGx tool answers the wrong question. Genetics
+only describes metabolism. Datum leads with the symptom picture and interactions and uses
+genetics as a filter on top. A specialist GP told us directly that the genetics-first version
+would lose clinician trust, so we rebuilt it.
 
-**1:25 - 1:30 — The expansion.** "Antidepressants are the demo. The same engine extends to pain, cardiology, and oncology. We collapse months of trial and error into evidence you can read in seconds."
+**Q2. How is this safe if it is recommending drugs?**
+It recommends nothing on its own. It is advisory decision support. Every verdict is rule-based
+and cited to FASS and CPIC, so the clinician can check it and remains the decision-maker. We
+never diagnose or prescribe, and the tool is never the sole driver.
+
+**Q3. What about regulation?**
+As advisory support that a clinician interprets, we sit in the lighter category today. We are
+honest that moving toward driving decisions more directly brings us under medical device
+rules, likely Class II under the EU MDR, and we are planning the product and evidence for that
+path rather than pretending it does not exist.
+
+**Q4. Who pays, and why would they?**
+Pharmacist-led PGx services first. They already order the tests and need a defensible way to
+act on them. Then psychiatry and primary-care groups, who carry the trial-and-error cost.
+The scale play is licensing the engine into a journal or EHR, which the short structured
+output is designed for. The buyer's return is fewer failed first attempts and fewer avoidable
+interaction events.
+
+**Q5. Why only seven drugs and three genes? Is that not too small?**
+It is deliberate scope, not a limit of the idea. These seven cover the bulk of antidepressant
+prescribing and the three genes carry the relevant metabolism. Starting narrow lets every rule
+be traceable and clinically defensible, which is exactly what earns clinician trust. The
+architecture extends drug by drug and gene by gene once the core is validated.

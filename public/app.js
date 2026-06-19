@@ -118,6 +118,10 @@ const elements = {
   fanoutSummary: document.getElementById("fanout-summary"),
   fanoutStatus: document.getElementById("fanout-status"),
   fanoutResults: document.getElementById("fanout-results"),
+  symptomOptions: document.getElementById("symptom-options"),
+  currentMeds: document.getElementById("current-meds"),
+  clinicalNoteBlock: document.getElementById("clinical-note-block"),
+  clinicalNote: document.getElementById("clinical-note"),
 };
 
 function setBusy(button, busy, text) {
@@ -340,6 +344,7 @@ function resetResults() {
   elements.patientCard.hidden = true;
   elements.followupCard.hidden = true;
   elements.fanoutCard.hidden = true;
+  if (elements.clinicalNoteBlock) elements.clinicalNoteBlock.hidden = true;
   setStatus(elements.resultStatus, "");
   setStatus(elements.searchStatus, "");
   elements.drugResults.innerHTML = "";
@@ -580,6 +585,31 @@ async function loadConfig() {
   }
   elements.disclaimer.textContent =
     "Clinical decision support only. The final decision remains with the prescriber.";
+  renderSymptomOptions();
+}
+
+function renderSymptomOptions() {
+  const profiles = (state.config && state.config.symptomProfiles) || [];
+  elements.symptomOptions.innerHTML = profiles
+    .map(
+      (p) => `
+      <label class="symptom-chip" title="${escapeHtml(p.description || "")}">
+        <input type="checkbox" value="${escapeHtml(p.id)}" />
+        <span>${escapeHtml(p.label)}</span>
+      </label>`,
+    )
+    .join("");
+}
+
+function getSymptomProfileIds() {
+  return Array.from(elements.symptomOptions.querySelectorAll("input:checked")).map((i) => i.value);
+}
+
+function getCurrentMeds() {
+  return elements.currentMeds.value
+    .split(/[\n,]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
 }
 
 async function searchDrug() {
@@ -846,22 +876,32 @@ function loadGenotypeSample(key) {
   elements.genotypeIngestReport.innerHTML = "";
 }
 
-/* ---------- Multi-drug fan-out ---------- */
+/* ---------- Combined recommendation (symptom + interactions + PGx) ---------- */
 
-const FANOUT_ICON = { ok: "✓", caution: "!", alert: "!", none: "–" };
+const LEVEL_ICON = { preferred: "✓", neutral: "·", caution: "!", avoid: "✕" };
+const LEVEL_LABEL = {
+  preferred: "Reasonable first option",
+  neutral: "No specific concern",
+  caution: "Use with caution",
+  avoid: "Better avoided",
+};
+const LAYER_LABEL = { symptom: "Symptoms", interaction: "Interaction", pgx: "Genetics" };
 
 async function runFanout() {
   const payload = collectPayload();
-  if (!Object.keys(payload.phenotypeMap).length) {
+  const symptomProfileIds = getSymptomProfileIds();
+  const currentMeds = getCurrentMeds();
+
+  if (!Object.keys(payload.phenotypeMap).length && !symptomProfileIds.length && !currentMeds.length) {
     elements.fanoutCard.hidden = false;
-    setStatus(elements.fanoutStatus, "Enter or compute at least one gene phenotype first.", "flag-error");
+    setStatus(elements.fanoutStatus, "Add a symptom profile, current medications, or a genotype first.", "flag-error");
     elements.fanoutResults.innerHTML = "";
     return;
   }
 
   setBusy(elements.runFanout, true, "Ranking...");
   elements.fanoutCard.hidden = false;
-  setStatus(elements.fanoutStatus, "Checking every supported antidepressant against this genotype...");
+  setStatus(elements.fanoutStatus, "Weighing symptoms, interactions, and genetics across all 7 drugs...");
 
   try {
     const response = await fetch("/api/fan-out", {
@@ -869,6 +909,8 @@ async function runFanout() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         phenotypeMap: payload.phenotypeMap,
+        symptomProfileIds,
+        currentMeds,
         patientContext: {
           patientName: payload.patientName,
           age: payload.age,
@@ -895,32 +937,48 @@ function renderFanout(data) {
   }
 
   const s = data.summary || {};
-  elements.fanoutSummary.textContent = `${s.ok || 0} preferred · ${s.caution || 0} caution · ${s.alert || 0} alternative · ${s.none || 0} no guidance`;
+  elements.fanoutSummary.textContent = `${s.preferred || 0} preferred · ${s.neutral || 0} neutral · ${s.caution || 0} caution · ${s.avoid || 0} avoid`;
+
+  const convNote = (data.conversions || []).length
+    ? ` Phenoconversion applied: ${data.conversions.map((c) => `${c.culprit} → effective ${c.gene} ${c.to}`).join("; ")}.`
+    : "";
   setStatus(
     elements.fanoutStatus,
-    data.anyFallbackUsed ? "Some rows used fallback demo data (live CPIC unavailable)." : "Live CPIC guidance retrieved for the full panel.",
+    (data.anyFallbackUsed ? "Some rows used fallback demo data (live CPIC unavailable)." : "Live CPIC guidance retrieved for the full panel.") + convNote,
     data.anyFallbackUsed ? "flag-fallback" : "flag-live",
   );
 
   elements.fanoutResults.innerHTML = results
     .map((row) => {
-      const geneLine =
-        row.gene && row.phenotype ? `${escapeHtml(row.gene)}: ${escapeHtml(row.phenotype)}` : "No matched gene";
+      const reasons = (row.reasons || [])
+        .map(
+          (r) => `
+            <li class="reason reason-${r.layer}">
+              <span class="reason-tag">${escapeHtml(LAYER_LABEL[r.layer] || r.layer)}</span>
+              <span class="reason-text">${escapeHtml(r.text)}</span>
+              ${r.source ? `<span class="reason-source">${escapeHtml(r.source)}</span>` : ""}
+            </li>`,
+        )
+        .join("");
       return `
-        <article class="fanout-row level-${row.verdictLevel}">
-          <span class="fanout-rank">${row.rank}</span>
-          <span class="fanout-icon">${FANOUT_ICON[row.verdictLevel] || "–"}</span>
-          <div class="fanout-main">
-            <div class="fanout-drug">${escapeHtml(row.drug)}</div>
-            <div class="fanout-rec">${escapeHtml(row.recommendationText || "")}</div>
+        <article class="fanout-row level-${row.overallLevel}">
+          <div class="fanout-head">
+            <span class="fanout-rank">${row.rank}</span>
+            <span class="fanout-icon">${LEVEL_ICON[row.overallLevel] || "·"}</span>
+            <span class="fanout-drug">${escapeHtml(row.drug)}</span>
+            <span class="fanout-label">${escapeHtml(LEVEL_LABEL[row.overallLevel] || "")}${row.fallbackUsed ? " · fallback" : ""}</span>
           </div>
-          <div class="fanout-side">
-            <span class="fanout-label">${escapeHtml(row.rankLabel || "")}</span>
-            <span class="fanout-gene">${geneLine}${row.fallbackUsed ? " · fallback" : ""}</span>
-          </div>
+          ${reasons ? `<ul class="reason-list">${reasons}</ul>` : `<p class="fanout-rec">No flag from symptoms, interactions, or genetics.</p>`}
         </article>`;
     })
     .join("");
+
+  if (data.clinicalNote) {
+    elements.clinicalNoteBlock.hidden = false;
+    elements.clinicalNote.textContent = data.clinicalNote;
+  } else {
+    elements.clinicalNoteBlock.hidden = true;
+  }
 }
 
 /* ---------- Wire up ---------- */
@@ -941,6 +999,12 @@ elements.searchDrug.addEventListener("click", searchDrug);
 elements.runEvaluation.addEventListener("click", runEvaluation);
 elements.runValidation.addEventListener("click", runValidationSuite);
 elements.runFanout.addEventListener("click", runFanout);
+
+document.querySelectorAll("[data-meds]").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    elements.currentMeds.value = btn.dataset.meds || "";
+  });
+});
 
 elements.genotypeParse.addEventListener("click", runGenotypeIngestion);
 elements.genotypeFileTrigger.addEventListener("click", () => elements.genotypeFile.click());
