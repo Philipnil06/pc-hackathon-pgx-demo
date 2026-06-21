@@ -4,249 +4,311 @@
 **Branch:** `erik-work`
 **Context:** Hackathon build (Pinecone Ventures, Visby). 24h window, Demo Day in
 front of investors + Cambio (the Cosmic EHR vendor). This spec is the agreed
-build for Erik's branch. It refines the technical handoff
-(`docs/Attune_Technical_Handoff.md`) with the team's pivot to an
-OpenEMR-specific integration.
+build for Erik's branch. It supersedes the earlier read-only SMART-on-FHIR panel
+design with the team's pivot to **the AI that makes the follow-up call**.
+
+---
+
+## 0. The one line
+
+The antidepressant gets started and then abandoned at the starting dose. Attune
+is the AI that makes the follow-up call — it phones the patient, runs the
+structured side-effect and symptom interview the guideline requires, and writes
+it into the journal as a note the doctor signs.
 
 ---
 
 ## 1. What we are building
 
-Attune is a **clinical decision-support layer that integrates directly into an
-existing EHR (OpenEMR)**. The wedge is the integration itself: doctors already
-live in their journal system, so Attune plugs into it rather than asking them to
-open a separate portal. Once launched from inside OpenEMR, Attune reads the
-patient's **entire journal** via FHIR R4 — medications, conditions, labs,
-**genome / pharmacogenetic data, documents**, allergies — extracts the
-CYP2C19 / CYP2D6 phenotype from a genome `Observation`, **correlates it against
-known gene→drug relationships**, and renders a short, sourced recommendation for
-starting an antidepressant.
+Attune is a **headless backend service** that runs the antidepressant
+**follow-up loop** primary care skips, integrated into **OpenEMR**. It:
 
-Positioning (handoff §1, clinician summary): Attune does **not** predict which
-drug is most *effective*. It flags exposure/tolerability risk and interactions,
-and puts pharmacogenetics *in context*. Decision *support* — the clinician
-decides. Never "prescribe X."
+1. tracks each patient's place in the titration loop,
+2. **calls the patient automatically with an AI voice agent** at the loop
+   milestones and runs a **structured clinical interview** — adherence, start-up
+   side effects, the symptom rating scale (MADRS-S / PHQ-9) conversationally, and
+   a **suicidality red-flag screen**,
+3. runs a **rule-based, sourced** loop that decides the next step (escalate /
+   continue / maintain / switch), and
+4. **writes the result into OpenEMR** — a structured note carrying the interview
+   and rating, the sourced next-action as a **draft**, and the next follow-up
+   into the calendar.
 
-### Decisions that scope this build
+Because OpenEMR exposes the journal over **FHIR read**, Attune also reads the
+live medication list and any genome `Observation` at the start/escalation moment,
+so the **safety layer / phenoconversion** check is real (a patient on paroxetine
+is flagged a *functional* CYP2D6 poor metabolizer — the moment a static gene test
+misses).
 
-1. **The integration target is OpenEMR specifically, and it is the point.**
-   "Integrate where the doctor already works" is the core value proposition, not
-   demo dressing. We stand up OpenEMR **entirely** (Docker) and seed a full mock
-   patient profile in it.
-2. **Attune reads the whole patient journal**, not just the medication list:
-   `Patient`, `MedicationRequest`, `Condition`, `Observation` (labs **+ genome**),
-   `DocumentReference`, `AllergyIntolerance`.
-3. **Genome comes from OpenEMR as a FHIR `Observation`** with a recognizable
-   CYP2C19 / CYP2D6 code; Attune extracts and parses the phenotype. The manual
-   phenotype dropdown survives only as a demo override.
-4. **The correlation engine is still mocked** for the demo — a small hard-coded
-   gene→drug table plus scripted, sourced lines and the phenoconversion check. No
-   real CPIC dataset, no ML. Rule-based and traceable on purpose.
+**The division of labor that defines the product:** the AI **captures and
+documents** the call; a **rule-based engine decides** the next step; the
+**clinician reviews and signs** in OpenEMR. **No standalone clinician UI.** The
+only user-facing surface is the **patient call**.
 
-Cambio Open Services (COS) is **off the critical path**: it exposes FHIR data
-APIs only (no SMART App Launch) and key access is gated behind a signup +
-approval step we cannot wait on. OpenEMR replaces it as the simulated journal.
+Positioning: decision **support**, the clinician decides. Rule-based, sourced,
+traceable. Value is **fit, follow-up, and time** — **not** a claim that the AI
+picks the medicine or that genes beat the clinician.
+
+**Deferred (decide later, do not block the build):** the outreach **channel**
+(AI voice vs SMS) and the **GDPR/consent** specifics — both sit behind a provider
+interface with a test double.
 
 ---
 
-## 2. Architecture
+## 2. Why this shape (AI call + journal write-back, not a panel)
 
-Pure **React + Vite + TypeScript SPA**. No backend. `fhirclient` performs the
-SMART App Launch with **PKCE** (required by OpenEMR for public/browser clients)
-and returns a client bound to the launching EHR's FHIR endpoint.
+- The validated gap (see the handoff and the clinician conversations) is **what
+  happens after the prescription**: the SSRI is started and then stops at the
+  starting dose, rarely titrated, rarely followed up, rarely rated. The
+  **follow-up call nobody has time to make** is the unmet need — not another
+  read-only screen the doctor has to open.
+- A read-only recommendation panel still depends on the clinician initiating the
+  work. **An AI that makes the call removes the labor that causes the loop to
+  fail.** It also produces the documentation burden's relief as a side effect: a
+  ready note.
+- It is built to run **inside the record the doctor already uses** (OpenEMR /
+  the open Cosmic ecosystem), which is where the medication history and prior
+  side effects live, and where the note must land to be useful.
+
+### Why OpenEMR
+
+- **Open-source and self-hostable**, so it is a **real EHR we fully control with
+  zero external credentials** — the entire stack (Docker) runs locally. The demo
+  is genuinely "running inside a real EHR," and nothing can gate or revoke it.
+- **FHIR R4 read** for the journal (meds, conditions, genome) and a **Standard
+  REST API** for writing the encounter + note + appointment (see §5a).
+- Standard SMART-on-FHIR / OAuth2 — credible, transferable integration craft and
+  the real path into a Cosmic specialty module.
+
+---
+
+## 3. Architecture
 
 ```
-┌─────────────────────────────────────────────┐
-│  OpenEMR (self-hosted, Docker)               │
-│  - Doctor clicks "Attune" inside OpenEMR     │
-│  - SMART EHR launch: launch token + iss      │
-└───────────────┬─────────────────────────────┘
-                │ SMART App Launch (OAuth2 + PKCE)
+                 (timer: day 14 / day 28)
+┌──────────────────────────────────────────────┐
+│  Attune backend service (Node + TypeScript)   │
+│  scheduler  → fires outreach at milestones     │
+│  outreach/  → AI voice agent CALLS the PATIENT │ ──▶ patient (AI phone call)
+│               runs the structured interview     │
+│               ◄── inbound webhook (result)      │ ◀── interview + rating + flags
+│  ratingscale/ score (pure)                     │
+│  loop/      next-action engine (pure) ◄ CORE   │
+│  selection/ first-choice + phenoconversion     │
+│  plans/     TreatmentPlan store                 │
+│  openemr/   FHIR R4 read + Standard REST write  │
+│  writeback/ loop result → Encounter + SOAP note │
+│             + Appointment                        │
+│  api/       Fastify: tick · webhook · health     │
+└───────────────┬────────────────────────────────┘
+                │ OAuth2 bearer
                 ▼
-┌─────────────────────────────────────────────┐
-│  ATTUNE (React/Vite/TS SPA)                  │
-│  1. /launch → fhirclient.authorize() (PKCE)  │
-│  2. /app → fhirclient.ready() → client       │
-│  3. fhir/ reads the FULL journal             │
-│  4. extract genome phenotype from Observation│
-│  5. recommendation/ (mocked) correlates →    │
-│     sourced recommendation                   │
-│  6. ui/ renders journal + panel; dropdown    │
-│     overrides phenotype live                 │
-└───────────────┬─────────────────────────────┘
-                │ FHIR R4 REST (read, bearer token, patient/*.read)
-                ▼
-┌─────────────────────────────────────────────┐
-│  OpenEMR FHIR R4  /apis/default/fhir/*       │
-│  Patient / MedicationRequest / Condition /   │
-│  Observation(genome) / DocumentReference /   │
-│  AllergyIntolerance                          │
-└─────────────────────────────────────────────┘
+┌──────────────────────────────────────────────┐
+│  OpenEMR (self-hosted, Docker)                  │
+│  read  (FHIR R4): Patient · MedicationRequest · │
+│        Condition · Observation (labs + genome)  │
+│  write (Standard REST): Encounter · soap_note · │
+│        Appointment                               │
+└───────────────┬────────────────────────────────┘
+                ▼  clinician opens OpenEMR, reviews & signs
 ```
 
-### OpenEMR access model (from research)
-
-- OpenEMR FHIR R4, SMART on FHIR v2.2.0, served at `/apis/default/fhir/*`;
-  OAuth2 at `/oauth2/default/*`. APIs are **off by default**; enabled in
-  Administration → Connectors, which also requires setting the **Site Address**.
-  **OAuth2 requires HTTPS** (self-signed cert locally — must be trusted in the
-  browser).
-- **Two OAuth2 clients:**
-  - **App client** — *public* (`token_endpoint_auth_method: none`), **PKCE S256**,
-    restricted to **`patient/*` read scopes** (OpenEMR rejects `user/*` and
-    `system/*` for public clients). Used by the Attune SPA. Reading the launched
-    patient's full record needs only `patient/*` scopes.
-  - **Seed client** — *confidential* (`client_secret_post`) with write scopes,
-    used once to POST the mock profile via FHIR. Public clients cannot write.
-- Registered apps need **approval** (Administration → Config → Connectors →
-  OAuth2 → App Manual Approval) before first use.
+- The backend owns the OpenEMR OAuth2 credentials, the loop logic, and the
+  treatment-plan store. No frontend; the only user surface is the patient call.
+- The loop engine is a **pure function of (plan, ratings, today)** — state is
+  data passed in, so it is fully unit-testable.
 
 ---
 
-## 3. FHIR targets
+## 4. The loop, end to end
 
-Same app code, configured by environment:
+The guideline-correct cycle (Region Stockholm, `kunskapsstodforvardgivare.se`):
 
-- **Primary — OpenEMR (self-hosted, Docker).** The real integration and the
-  demo. App `client_id` and FHIR `iss` come from env (`VITE_ATTUNE_CLIENT_ID`,
-  `VITE_FHIR_ISS`).
-- **Dev rig — `https://launch.smarthealthit.org`.** Instant, no signup, for
-  iterating on the app before OpenEMR is ready. Any `client_id` works there.
-- **Offline fallback — `?mock=1`.** A local mock client (synthetic journal incl.
-  a genome `Observation` and an active paroxetine med). The demo survives even if
-  OpenEMR misbehaves on the conference network.
+```
+ START SSRI (escitalopram/sertraline, low dose) — baseline rating captured
+        │
+ ~2 WEEKS: AI check-in call (onset side effects pass; adherence; retention)
+        │
+ ~4 WEEKS on a dose: AI interview → rating → REVIEW
+        ├─ remission (MADRS-S ≤10 / PHQ-9 <5) ──► maintain
+        ├─ response (≥50% ↓ from baseline) ─────► continue
+        ├─ partial/no response & dose < max ────► ESCALATE (name the next rung)
+        └─ no response & near max after budget ──► SWITCH
+   (any call: a suicidality red flag short-circuits to immediate escalation)
+```
 
----
+Runtime:
+1. **Scheduler** sees a patient due (~day 14 / ~day 28) from the plan store.
+2. **Outreach** reads the patient's phone from OpenEMR and the **AI voice agent
+   calls** them, running the structured interview (adherence, side effects, the
+   MADRS-S/PHQ-9 items, suicidality screen).
+3. **Interview result** → webhook → score + structured note content.
+4. **Loop** decides the next action; **selection** runs on the **real read med
+   list + genome** (phenoconversion fires on paroxetine) at start/escalation.
+5. **Write-back into OpenEMR:** an `Encounter`, a `SOAP note` (the interview +
+   rating in *objective*; the sourced next-action **draft** in *plan*), and an
+   `Appointment` (the review).
+6. **Clinician** opens OpenEMR, sees all three, reviews and signs.
 
-## 4. Components (isolated, independently testable units)
+Every recommendation line carries a source tag (kunskapsstöd för vårdgivare /
+CPIC 2023 / DPWG 2023 / FASS).
 
-### `auth/`
-Wraps `fhirclient` with PKCE and env config:
-- **`/launch`** — `FHIR.oauth2.authorize({ clientId: env, scope, redirectUri, iss: env })`. `fhirclient` uses PKCE (S256) automatically for public clients. EHR launch picks up `launch`+`iss` from the URL; standalone uses the configured `iss`.
-- **`/app`** — `FHIR.oauth2.ready()` → ready client.
-- Scopes: `launch openid fhirUser patient/Patient.read patient/MedicationRequest.read patient/Condition.read patient/Observation.read patient/DocumentReference.read patient/AllergyIntolerance.read`.
+### 4a. The structured interview ("the right questions")
 
-### `fhir/`
-Typed read functions over the ready client, mapping raw FHIR to plain models:
-- `getPatient`, `getActiveMedications`, `getConditions`, `getObservations`,
-  `getDocuments`, `getAllergies`.
-- `extractGenomePhenotypes(observations)` → `GenomePhenotype[]` — picks
-  Observations whose code/display names CYP2C19 / CYP2D6 and maps the value text
-  (e.g. "Poor metabolizer") to `UM | NM | IM | PM`.
+The AI call administers, in order:
+1. **Adherence** — still taking it? missed doses? when?
+2. **Start-up side effects** — nausea, insomnia, activation/anxiety, GI, sexual;
+   severity + trajectory (the transient effects patients quietly quit over).
+3. **Efficacy** — the MADRS-S / PHQ-9 items, asked conversationally, scored to a
+   total.
+4. **Red flags** — suicidality (MADRS-S item 9 / PHQ-9 item 9). A positive screen
+   **hard-escalates immediately** (alert, not a draft-for-next-week).
 
-### `recommendation/` (mocked engine)
-Pure function `recommend({ patient, medications, conditions, phenotype }) → Recommendation`:
-- Small hard-coded gene→drug table for the worked cases (escitalopram + CYP2C19
-  PM/UM/IM/NM).
-- **Phenoconversion check (real, trivial):** if the active med list contains a
-  strong CYP2D6 inhibitor (paroxetine / fluoxetine / bupropion), emit the
-  "functional CYP2D6 poor metabolizer" line even when phenotype = NM.
-- Serotonergic combination flag.
-- Each line carries a source tag (CPIC 2023 / DPWG 2023 / FASS). Interface is
-  identical to what a real engine would expose, so the mock is not throwaway.
-
-### `ui/`
-- `PatientHeader`, `MedicationList`, `GenomeCard` (extracted phenotype + source),
-  `ObservationList`, `DocumentList`, `AllergyList`, `PhenotypeSelector` (override,
-  labeled "entered / override"), `RecommendationPanel`, `SourceTag`.
-- Clinical, compact styling.
-
-### `mock/`
-Local synthetic journal + a fake client for `?mock=1`, including a CYP2C19
-genome `Observation` and an active paroxetine medication so the hero case fires
-offline.
-
-### OpenEMR environment (`docker-compose.yml`, `openemr/`, `scripts/seed/`)
-- `docker-compose.yml` — OpenEMR + MariaDB (DB healthcheck + `depends_on:
-  service_healthy`).
-- Runbook to enable Connectors / Site Address, register the public app client and
-  the confidential seed client, and approve the app.
-- `scripts/seed/seed.sh` — registers the seed client, gets a token, and POSTs the
-  mock profile (Patient, Condition, active MedicationRequest = paroxetine,
-  genome Observation). UI fallback documented per resource.
+The AI **transcribes and structures**; it does **not** decide the medical action.
 
 ---
 
-## 5. Data flow
+## 5. OpenEMR integration
 
-OpenEMR EHR launch → `auth` (`/launch` → `/app`, PKCE) → `fhir` reads the full
-journal → `extractGenomePhenotypes` resolves the CYP2C19 phenotype → `recommend()`
-correlates → `RecommendationPanel`. The `PhenotypeSelector` dropdown overrides the
-extracted phenotype and re-runs `recommend()` live (no refetch).
+- **Auth:** OAuth2 against `/oauth2/default/*` (HTTPS, self-signed cert trusted
+  locally). A confidential client with read + Standard-API write scopes.
+- **Read** (`/apis/default/fhir/*`): `Patient` (incl. `telecom` phone),
+  `MedicationRequest?status=active`, `Condition`, `Observation` (labs + genome).
+- **Write** (Standard REST `api:oemr`): `Encounter`, `soap_note`, `Appointment`.
+- The genome phenotype is extracted from an `Observation` whose code/text names
+  CYP2C19/CYP2D6 and whose value text contains the phenotype word.
 
----
+### 5a. Implementation note (verified against OpenEMR 7.0.3, 2026-06-21)
 
-## 6. Error handling
+OpenEMR 7.0.3 does **not** offer symmetric FHIR read + write. Verified live:
 
-- **Launch / auth failure** → fall back to standalone launch with a patient
-  picker, or `?mock=1`. Clear error state, not a blank screen.
-- **Self-signed cert** → runbook tells the user to trust the OpenEMR cert in the
-  browser before launching.
-- **CORS blocked** → small Node proxy forwarding FHIR reads (back-pocket only).
-- **A FHIR resource type unsupported / empty** → that journal section degrades
-  gracefully; the panel still renders.
-- **All FHIR unavailable** → `?mock=1` offline journal. State clearly it is
-  synthetic.
-
----
-
-## 7. Testing
-
-**Vitest** unit tests on the pure layers:
-- `recommendation/` — escitalopram + CYP2C19 PM (dose reduction), UM
-  (underexposure), paroxetine phenoconversion (functional CYP2D6 PM at NM),
-  serotonergic combo.
-- `fhir/` — mappers and `extractGenomePhenotypes` (CYP2C19 "Poor metabolizer" →
-  PM; ignores non-genome Observations).
-
-OpenEMR/auth plumbing verified manually (launcher + OpenEMR). Light,
-hackathon-appropriate.
+- **FHIR write is read-only for clinical data.** `POST` of FHIR `Observation`,
+  `DocumentReference`, and `Appointment` returns **404**; the only advertised
+  FHIR `.write` scopes are `Patient`, `Organization`, `Practitioner`.
+- **Reads work over FHIR** (`Patient`, `MedicationRequest`, `Condition`,
+  `Observation`) — the phenoconversion read is genuinely FHIR-real.
+- **Writes use OpenEMR's Standard REST API** (`api:oemr`): an `Encounter`, a
+  `SOAP note` (rating + interview in *objective*; sourced recommendation DRAFT in
+  *plan*), and an `Appointment`.
+- FHIR uses the patient UUID; the Standard API uses the numeric pid →
+  `resolvePid(uuid)` bridges them. The encounter route keys on the UUID;
+  soap_note and appointment key on the pid.
+- The whole stack comes up **credential-free with no UI clicks** via
+  `scripts/setup-openemr.sh`. The genome `Observation` cannot be seeded (no write
+  path), so selection defaults the phenotype to NM; the phenoconversion line still
+  fires from the read med list (paroxetine). See `OPENEMR.md`.
 
 ---
 
-## 8. Scope cuts (YAGNI for the 24h)
+## 6. Components (independently testable)
 
-- No real CPIC/DPWG dataset — scripted gene→drug lines only.
-- No backend unless CORS forces the proxy fallback.
-- No COS integration (off critical path).
-- Genome representation limited to a CYP2C19 (and optionally CYP2D6) phenotype
-  Observation — not full genomic sequence resources.
+- `domain/` — shared models (TreatmentPlan, DoseStep, RatingScaleEntry,
+  Instrument, ResponseStatus, LoopAction, LoopRecommendation; interview models;
+  plus journal read models Patient/Medication/Condition/GenomePhenotype).
+- `ratingscale/` — `scoreStatus` (MADRS-S/PHQ-9). Pure.
+- `loop/` — `nextAction({plan,ratings,today})`. Pure. CORE.
+- `selection/` — `firstChoice({patient,medications,conditions,phenotype})` incl.
+  the phenoconversion check. Fed by OpenEMR reads.
+- `fhir/` — read mappers (patient/med/condition/observation, genome + rating
+  extraction). Pure.
+- `openemr/` — client: OAuth2 token (cached), `findPatient`, `readJournal`,
+  `resolvePid`, `createEncounter`, `writeSoapNote`, `bookAppointment`. Fetch
+  injected for tests.
+- `scheduler/` — `dueOutreach(plans, today)`.
+- `outreach/` — provider interface + test-double provider + the AI-call interview
+  runner + webhook → `RatingScaleEntry` (+ structured note content). The only user
+  surface (patient-side).
+- `writeback/` — `planActionToWrites` (pure) + executor calling the openemr client.
+- `plans/` — TreatmentPlan + rating store (in-memory/JSON for the demo).
+- `api/` — Fastify routes: `POST /api/tick`, `POST /api/outreach/webhook`,
+  `GET /health`.
+- OpenEMR env — `docker-compose.yml`, `scripts/setup-openemr.sh`, `OPENEMR.md`.
 
----
-
-## 9. Demo script
-
-1. Open OpenEMR with a patient loaded.
-2. Click "Attune" → panel launches embedded inside OpenEMR, already knowing the
-   patient (no second login). "Standard SMART on FHIR launch — same way it drops
-   into Cosmic."
-3. Show it reading the **whole journal** live — meds, conditions, and the
-   **genome record pulled from OpenEMR**.
-4. Set the phenotype override to **Poor Metabolizer** → sourced dose-reduction
-   line appears.
-5. **Money moment:** with the genome showing CYP2D6 **Normal**, the patient is on
-   paroxetine → Attune flags **functional CYP2D6 poor metabolizer via
-   phenoconversion**. "A static gene test would call this patient normal. Attune
-   doesn't, because it reads the medication list inside the journal."
-
----
-
-## 10. Known dependencies / risks
-
-- **OpenEMR setup is the biggest time sink and risk.** Mitigated by the `?mock=1`
-  offline path, which needs no OpenEMR.
-- **Genome Observation seeding** depends on OpenEMR's FHIR write support for
-  `Observation`; if a version rejects it, seed via the UI or as a
-  `DocumentReference` — the extractor only needs a recognizable code + value text.
-- **Hero case data:** the seeded patient must have an active strong CYP2D6
-  inhibitor (paroxetine) for the phenoconversion line.
+No clinician UI, no frontend workspace.
 
 ---
 
-## 11. Tech stack
+## 7. State
 
-- React + Vite + TypeScript; `fhirclient` (PKCE); `react-router-dom`; Vitest +
-  `@testing-library/react`.
-- OpenEMR + MariaDB via Docker.
-- Local Vite dev server; deploy to Vercel/Netlify only if a public redirect URL
-  is needed. OpenEMR + app on localhost works for a same-machine demo.
+OpenEMR has no titration-state object. **Attune holds the `TreatmentPlan` +
+captured ratings in its own store** (drug, dose history, escalations, milestones,
+outreach status), seeded for the demo. `readJournal` additionally hydrates
+meds/genome for selection. Demo store = in-memory/JSON; production = a small DB.
+
+---
+
+## 8. Data flow
+
+`scheduler` (timer) → `outreach` AI-calls the patient and runs the interview →
+webhook → `ratingscale.scoreStatus` → `loop.nextAction` (+ `selection.firstChoice`
+from `openemr.readJournal`) → `writeback` → OpenEMR (`Encounter` + `soap_note` +
+`Appointment`) → clinician reviews/signs in OpenEMR.
+
+---
+
+## 9. Demo script (credential-free, fully real EHR)
+
+1. `docker compose up -d`, seed OpenEMR (escitalopram 10 mg 4 weeks ago,
+   paroxetine, MADRS-S baseline 30). Start Attune (`OUTREACH_MOCK=1`).
+2. Trigger the scheduler — Attune **calls the patient** (mocked AI voice for the
+   demo). The patient reports worsening insomnia + flat mood; the interview yields
+   **MADRS-S 28** (flat).
+3. Loop → **escalate** (name the rung: **10 → 15 mg**); selection flags
+   **functional CYP2D6 PM via phenoconversion** from the **real** read med list
+   (paroxetine).
+4. Attune writes to **real OpenEMR**: an `Encounter`, a `SOAP note` (the interview
+   + MADRS-S 28 + the sourced escalation **draft**), an `Appointment` (4-week
+   review). Open OpenEMR and show all three.
+5. *"No one staffed this call. Attune made it, ran the guideline interview, and
+   put the result and the next step straight into the journal. The doctor just
+   reviews and signs."*
+
+---
+
+## 10. Regulatory note
+
+Automated outreach + a dose-steering recommendation → **EU MDR Class IIa**.
+Mitigations: the AI **captures and documents** (does not decide); every write is a
+**draft the clinician reviews and signs in OpenEMR** (no silent/auto-signed
+writes); every recommendation is **sourced**; the engine is **rule-based and
+traceable**; a **suicidality red flag hard-escalates** rather than waiting in a
+draft. Patient health data leaving the EHR (the call) needs consent + minimization
+— the deferred GDPR work, behind the provider interface.
+
+---
+
+## 11. Scope cuts (YAGNI)
+
+- Outreach channel (live AI telephony) + GDPR deferred behind the provider
+  interface; `OUTREACH_MOCK=1` simulates the call for the demo.
+- Engine rule-based/mocked — no real CPIC dataset.
+- TreatmentPlan store in-memory/JSON.
+- No clinician UI, no frontend.
+- Genome limited to a CYP2C19 (+ optional CYP2D6) phenotype Observation.
+- OpenEMR only (no Webdoc, no mock-only variant, no COS).
+
+---
+
+## 12. Tech stack
+
+- Backend: Node + TypeScript (Fastify), `fetch`/`undici`, Vitest.
+- OpenEMR FHIR R4 read + Standard REST write over OAuth2; OpenEMR + MariaDB via Docker.
+- AI-call provider behind an interface (voice/transcription/structuring); test
+  double for the demo. Store in-memory/JSON. No frontend.
+
+---
+
+## 13. Config
+
+```
+PORT=8080
+OUTREACH_MOCK=1                # simulate the patient call (channel deferred)
+OPENEMR_FHIR_BASE=https://localhost:9300/apis/default/fhir
+OPENEMR_OAUTH_BASE=https://localhost:9300/oauth2/default
+OPENEMR_CLIENT_ID=             # confidential client (read+write), from OPENEMR.md
+OPENEMR_CLIENT_SECRET=
+OPENEMR_USER=admin             # API user for the password grant (demo)
+OPENEMR_PASS=
+NODE_TLS_REJECT_UNAUTHORIZED=0 # demo only: accept the self-signed OpenEMR cert
+```
+Secrets are backend-only.

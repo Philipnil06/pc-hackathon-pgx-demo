@@ -2,215 +2,155 @@
 
 **Context:** Hackathon build (Pinecone Ventures, Visby). 24h window, Demo Day in front of investors + Cambio (the Cosmic EHR vendor) in the room. This document tells you exactly what to build and why.
 
-**Read this first, in one sentence:** We are NOT building a website and we are NOT building a screen-scraping overlay. We are building a **SMART on FHIR app** — the industry-standard way a third-party tool launches *inside* an EHR, reads the live patient context, and renders a recommendation panel. This is both the fastest credible demo and the real path into Cambio Cosmic.
+**Read this first, in one sentence:** We are NOT building a website, NOT a screen-scraping overlay, and NOT a read-only recommendation panel. We are building **the AI that makes the antidepressant follow-up call** — a headless service that phones the patient at the guideline milestones, runs a structured clinical interview, and **writes the result back into the EHR** as a note the doctor signs. The journal is read over **FHIR**; the note is written into a real, self-hosted **OpenEMR**.
 
 ---
 
 ## 1. The product in one paragraph
 
-Attune is a **clinical decision-support layer** for starting antidepressants. Given the patient's symptom profile, **live medication list**, diagnosis, and (when available) pharmacogenetic phenotype (CYP2C19 / CYP2D6), it returns a **short, sourced, traceable recommendation**: which SSRI to favor or avoid, what starting dose, and what to monitor. 
+Attune is a **clinical decision-support service for antidepressant treatment**. Its core is the **follow-up loop** primary care skips: start, structured check-ins, symptom rating scales, dose titration until the patient actually improves. Attune runs that loop by **calling the patient** with an AI voice agent at ~2 and ~4 weeks, conducting a structured interview (adherence, start-up side effects, the MADRS-S/PHQ-9 items, a suicidality red-flag screen), then **writing a structured note + a sourced next-step draft + the next appointment into the journal**. At the start/escalation moment it also weighs the live medication list, interactions, and (where available) pharmacogenetics into the recommendation.
 
-**Critical framing for the logic:** Attune does **not** predict which drug will be most *effective*. It flags exposure/tolerability risk (genotype) and dangerous combinations (interactions), and it puts pharmacogenetics *in context*. Build the logic to reflect that — it is rule-based and explainable, not a black box. (This is also what keeps us on the safer side of medical-device regulation; see §9.)
+**Critical framing for the logic:** Attune does **not** decide the medicine, and it does **not** predict which drug will be most *effective*. The AI **captures and documents** the call; a **rule-based engine decides** the next step (escalate / continue / maintain / switch); the **clinician reviews and signs**. Genetics is a sourced **safety filter** for the subset with actionable variants — it flags exposure/tolerability risk and dangerous combinations and puts pharmacogenetics *in context*. Build the logic to reflect that — rule-based and explainable, not a black box. (This is also what keeps us on the safer side of medical-device regulation; see §9.)
 
 ---
 
-## 2. Why SMART on FHIR, not an overlay
+## 2. Why an AI call + journal write-back, not a panel
 
 There are two "surfaces" to an EHR:
 
-1. **Data surface** — how you read patient data. Modern EHRs (including Cosmic) expose this as a **FHIR API**: clean, structured JSON resources. You query it; you do not OCR the screen.
-2. **Visual surface** — where your UI appears. The standard is **SMART App Launch**: the EHR opens your app in an **iframe / embedded panel** and hands it the current patient context via an OAuth2 token.
+1. **Data surface** — how you read patient data. Modern EHRs (including OpenEMR and Cosmic) expose this as a **FHIR API**: clean, structured JSON. You query it; you do not OCR the screen.
+2. **Write surface** — where your output lands. Attune writes the **Encounter + SOAP note + Appointment** back into the record over the EHR's write API, so the doctor finds a ready note in the chart they already use.
 
-Together these are "SMART on FHIR." The clinician clicks a button in the EHR, your panel appears already knowing which patient is open — no second login, no patient lookup, no copy-paste.
-
-**Why this beats the overlay/Togi/OCR idea:**
-- Structured FHIR data (the real medication list) is far more reliable than scraping pixels.
-- It is the *actual* integration path into Cosmic, so the demo doubles as a real go-to-market proof.
-- "We built against Cambio's open FHIR sandbox" is a concrete traction claim — strong with Cambio in the room.
-- An overlay only makes sense for EHRs with no API. Cosmic has one. Use it.
+**Why this beats the read-only panel idea:**
+- A panel still depends on the clinician *initiating* the work. The validated gap is that the follow-up **doesn't happen** — time and stress. **An AI that makes the call removes the labor that causes the loop to fail.**
+- The note write-back relieves documentation burden as a side effect: the doctor reviews and signs instead of typing.
+- Structured FHIR data (the real medication list) drives a real safety check (phenoconversion), far more reliable than scraping pixels.
+- It is the *actual* integration path into the open Cosmic ecosystem, so the demo doubles as go-to-market proof — strong with Cambio in the room.
 
 ---
 
 ## 3. Architecture
 
 ```
+              (timer: ~day 14 / ~day 28)
 ┌─────────────────────────────────────────────┐
-│  EHR (sandbox for the demo)                  │
-│  - Launches Attune in an iframe              │
-│  - Passes: launch token + iss (FHIR base URL)│
+│  ATTUNE backend service (Node + TypeScript)  │
+│  scheduler → outreach (AI CALLS the patient) │ ──▶ patient (AI phone call)
+│  structured interview ◄── inbound webhook    │ ◀── rating + side effects + flags
+│  ratingscale (pure) → loop engine (pure) +   │
+│  selection (phenoconversion from FHIR read)  │
+│  writeback → Encounter + SOAP note + Appt    │
 └───────────────┬─────────────────────────────┘
-                │ SMART App Launch (OAuth2)
+                │ OAuth2 bearer
                 ▼
 ┌─────────────────────────────────────────────┐
-│  ATTUNE (React/Vite SPA)                     │
-│  1. Receives launch → OAuth2 handshake       │
-│  2. Reads FHIR resources for current patient │
-│  3. Runs rule engine (the differentiator)    │
-│  4. Renders sourced recommendation panel     │
+│  OpenEMR (self-hosted, Docker)               │
+│  READ  (FHIR R4): Patient / MedicationRequest│
+│        / Condition / Observation (genome)    │
+│  WRITE (Standard REST): Encounter / soap_note│
+│        / Appointment                          │
 └───────────────┬─────────────────────────────┘
-                │ FHIR R4 REST (read)
-                ▼
-┌─────────────────────────────────────────────┐
-│  FHIR server (sandbox)                        │
-│  Patient / MedicationRequest / Condition /    │
-│  Observation / AllergyIntolerance             │
-└─────────────────────────────────────────────┘
+                ▼  clinician opens OpenEMR, reviews & signs
 ```
 
-Three layers to build:
-- **Launch + auth** (boilerplate, use a library — §6)
-- **FHIR data fetch** (a few read calls — §7)
-- **Rule engine + UI** (this is the actual product — §8). Spend your time here.
+Layers to build:
+- **Scheduler + outreach** (the AI call, behind a provider interface with a test double)
+- **Loop engine + selection** (the rule-based, sourced decision — this is the product; spend your time here)
+- **OpenEMR client** (FHIR read + Standard-REST write) and **writeback**
+
+There is **no frontend**. The only user-facing surface is the **patient call**; the clinician works in OpenEMR.
 
 ---
 
-## 4. Sandbox options (pick one to start, in this order)
+## 4. The EHR (self-hosted, credential-free)
 
-You do **not** need a real EHR. Use a simulator that performs a real SMART launch.
+You do **not** need a SaaS EHR or external keys. Stand up **OpenEMR 7.0.3 + MariaDB via Docker** and drive it headlessly.
 
-1. **SMART App Launcher — `https://launch.smarthealthit.org`** (recommended starting point.)
-   - Free, public, no signup. Simulates an EHR launch, lets you pick a synthetic patient, hands your app a launch token + a working FHIR R4 endpoint. This is what you develop against first.
-2. **`aehrc/SMART-EHR-Launcher`** (GitHub, open source.)
-   - A React EHR-simulator dashboard that renders your app **embedded inside a mock EHR** with patient/encounter switching. Use this to make the demo *look* like it's inside an EHR. Run locally via Docker.
-3. **Cambio Open Services (COS) sandbox — `https://developer.openservices.cambio.se`** (the credibility play.)
-   - A **full COSMIC install with synthetic test data**, FHIR + REST APIs, Azure API Management. Requires signup for API keys; production access is gated behind registering an idea via "Cambio innovation" (B2B). For the hackathon: sign up, get sandbox keys, and at minimum hit one FHIR endpoint so you can truthfully say "Attune runs against Cambio's COS sandbox." 
-   - **Open question to resolve with Cambio (they're at the event):** confirm whether COS exposes full **SMART App Launch** (embedded iframe + context) or **FHIR data APIs only**. If data-only, do the embedded-launch demo on the SMART Launcher (option 1/2) and use COS for the data-layer proof.
-
-**Plan:** develop on option 1, dress the demo with option 2, and get at least one real call against option 3 for the traction line.
+- `docker compose up -d`, then `scripts/setup-openemr.sh` enables the APIs, registers + enables a confidential OAuth2 client, seeds the hero patient, and writes `.env`. **No UI clicks.**
+- **Reality check, verified on 7.0.3:** FHIR clinical **write is read-only** (`POST` of Observation / DocumentReference / Appointment → 404). So Attune **reads over FHIR** and **writes over the Standard REST API** (`api:oemr`): an Encounter, a `soap_note`, and an Appointment. FHIR uses the patient UUID; the Standard API uses the numeric pid — `resolvePid` bridges them.
+- This is the credibility play *and* the demo: a real EHR you fully control locally, nothing to gate or revoke. "We host the whole EHR and write a real note into it" beats any mockup.
 
 ---
 
 ## 5. Tech stack
 
-- **Frontend:** React + Vite + TypeScript (fast to scaffold, matches the SMART tooling).
-- **SMART/FHIR client:** `fhirclient` (npm, the official SMART Health IT JS library, a.k.a. fhirclient.js). Handles the OAuth2 launch dance for you.
-- **UI:** Tailwind or plain CSS. Keep the recommendation panel clean and compact — it has to look like it belongs in a clinical screen, not a consumer app.
-- **Rule engine:** plain TypeScript module + a JSON ruleset. No ML. Deterministic and traceable on purpose.
-- **Hosting for the demo:** Vite dev server is fine locally; if you need a public URL for the launcher to redirect to, deploy to Vercel/Netlify (free).
+- **Backend:** Node + TypeScript + Fastify (fast to scaffold, fully testable). `fetch`/`undici` for HTTP. Vitest.
+- **AI call:** behind a `provider` interface (`placeCall(patient, job) → InterviewResult`). For the 24h, `OUTREACH_MOCK=1` returns a scripted interview result; live voice/transcription is the swap-in later. Do not block the demo on live telephony.
+- **Loop engine:** plain TypeScript + a sourced ruleset. No ML. Deterministic and traceable on purpose.
+- **OpenEMR + MariaDB:** Docker, localhost, self-signed cert trusted locally.
 
 ---
 
-## 6. Launch + auth (boilerplate)
+## 6. The patient call (the structured interview)
 
-Install:
-```bash
-npm create vite@latest attune -- --template react-ts
-cd attune && npm install fhirclient
-```
+The AI administers, in order — these are "the right questions":
 
-You need two routes/pages:
+1. **Adherence** — still taking it? missed doses, and when?
+2. **Start-up side effects** — nausea, insomnia, activation/anxiety, GI, sexual; severity + trajectory. (These transient effects are what patients quietly quit over; ask so the note captures them.)
+3. **Efficacy** — the MADRS-S / PHQ-9 items, asked conversationally, scored to a total.
+4. **Red flags** — suicidality (MADRS-S item 9 / PHQ-9 item 9). A positive screen **hard-escalates immediately** (urgent alert + appointment), not a draft that waits a week.
 
-**`/launch`** — entry point the EHR calls. Kicks off OAuth2.
-```js
-import FHIR from "fhirclient";
-
-FHIR.oauth2.authorize({
-  clientId: "attune",            // registered client id (sandbox: any value works)
-  scope: "launch openid fhirUser patient/*.read",
-  redirectUri: "/app",
-});
-```
-
-**`/app`** — where the EHR redirects back. Completes auth, gives you a ready client.
-```js
-import FHIR from "fhirclient";
-
-FHIR.oauth2.ready().then(async (client) => {
-  const patient = await client.patient.read();              // current patient
-  const meds = await client.request(
-    `MedicationRequest?patient=${client.patient.id}&status=active`,
-    { flat: true }
-  );
-  const conditions = await client.request(
-    `Condition?patient=${client.patient.id}`, { flat: true }
-  );
-  // → hand these to the rule engine (§8)
-});
-```
-
-To test: open `https://launch.smarthealthit.org`, set the app's launch URL to your `/launch` route, pick a patient, go. (For local dev you'll point the launcher at your `http://localhost:5173/launch`, or deploy and use the public URL.)
-
-> Note: exact `fhirclient` method names/options are stable but check the current docs (docs.smarthealthit.org / npm `fhirclient`) if anything errors. Watch for **CORS** — if the sandbox FHIR server blocks browser calls, route requests through a tiny backend proxy.
+The AI **transcribes and structures** the answers into an `InterviewResult` (rating + side-effect notes + `redFlag`). It does **not** decide the medical action.
 
 ---
 
-## 7. FHIR resources to fetch (the inputs)
+## 7. FHIR resources to read (the safety inputs)
 
-Read these for the launched patient (all FHIR R4):
+Read these for the patient (all FHIR R4) at the start/escalation moment:
 
 | Resource | What you use it for |
 |---|---|
-| `Patient` | age, sex (dosing context, elderly flag) |
+| `Patient` | age, sex, **`telecom` phone** (the number to call) |
 | `MedicationRequest` (status=active) | **the live medication list** — the core input for interaction + phenoconversion checks |
-| `Condition` | diagnosis / symptom context (depression, anxiety, etc.) |
-| `Observation` | labs if present; also where a PGx genotype result could live |
-| `AllergyIntolerance` | safety, avoid-list |
+| `Condition` | diagnosis / symptom context |
+| `Observation` | labs; also where a PGx genotype result could live |
 
-**Pharmacogenetic phenotype (CYP2C19 / CYP2D6):** in the real world this comes from a lab result. Sandboxes won't have it. For the demo, provide it as a **manual input field** (a dropdown: Normal / Intermediate / Poor / Ultrarapid metabolizer) so you can show the recommendation changing live. Be explicit in the demo that genotype is entered/simulated — do not imply the sandbox supplied it.
+**Pharmacogenetic phenotype (CYP2C19 / CYP2D6):** in the real world this is a lab result; OpenEMR 7.0.3 can't seed a genome Observation (no write path), so selection defaults the phenotype to NM and the **phenoconversion line still fires from the read med list** (paroxetine). Be explicit in the demo that the genotype is defaulted/simulated — do not imply the EHR supplied it.
 
 ---
 
 ## 8. The rule engine (this is the product — spend your time here)
 
-Keep it **deterministic, ordered, and traceable**. Every output line cites why. This mirrors the clinical positioning and is the part judges will probe.
+Keep it **deterministic, ordered, and traceable**. Two engines:
 
-**Processing order:**
-
-1. **Symptom profile** (from `Condition` + a few UI toggles): e.g. depression + insomnia, depression + anxiety, fatigue-dominant, weight concern, pain, sexual-side-effect concern, suicidality flag.
-2. **Interaction / risk scan** over the active medication list: serotonergic load (→ serotonin syndrome risk), CYP inhibitors/inducers, QT-prolongation risk, bleeding risk (e.g. SSRIs + NSAID/anticoagulant), sedation load.
-3. **PGx filter** (CYP2C19 / CYP2D6 phenotype → CPIC/DPWG dosing guidance for the candidate SSRI).
-4. **Phenoconversion adjustment** — the differentiator: if the med list contains a strong inhibitor of the relevant enzyme, **downgrade the effective phenotype** even if genotype is "normal." (A genotypic normal metabolizer on a strong CYP2D6 inhibitor is a *functional* poor metabolizer.)
-5. **Output**: a short, sourced recommendation — favored agent(s), avoid list, start dose, monitoring — each with a one-line rationale and source tag.
-
-**Minimal ruleset data structure (extend as time allows):**
-```ts
-type Phenotype = "UM" | "NM" | "IM" | "PM";
-
-interface DrugGeneRule {
-  drug: string;            // e.g. "escitalopram"
-  gene: "CYP2C19" | "CYP2D6";
-  guidance: Record<Phenotype, {
-    action: "standard" | "reduce_dose" | "avoid" | "monitor";
-    note: string;          // shown to clinician
-    source: string;        // "CPIC 2023" | "DPWG 2023" | "FASS"
-  }>;
-}
-
-// Strong inhibitors that trigger phenoconversion
-const CYP2D6_STRONG_INHIBITORS = ["paroxetine", "fluoxetine", "bupropion", "quinidine"];
-const CYP2C19_INHIBITORS = ["fluvoxamine", "fluconazole", "omeprazole" /* moderate */];
+**A. The loop** — `nextAction({plan, ratings, today})`, a pure function. Constants: onset 14d, review 28d, escalation budget 2; ladders escitalopram 10→15→20, sertraline 50→100→150→200. Ordered decision:
+```
+remission (MADRS-S ≤10 / PHQ-9 <5)   → maintain
+< 4 weeks on dose, some response      → continue
+response (≥50% ↓ from baseline)       → continue
+flat/partial & not at max dose        → escalate  (NAME the next rung: 10→15 mg)
+at max & escalation budget spent      → switch
+(any call: suicidality red flag       → immediate escalation)
 ```
 
-**Worked examples to hard-code for the demo (clinically grounded):**
+**B. Selection / safety filter** — at start/escalation, over the live med list + genome:
+- CYP2C19 phenotype → CPIC/DPWG dosing line for the candidate.
+- **Phenoconversion (the differentiator):** a strong CYP2D6 inhibitor in the med list (paroxetine / fluoxetine / bupropion) downgrades the *effective* phenotype even at genotype "Normal." *"Effective CYP2D6 poor metabolizer due to an interacting drug — genotype alone would miss this."* This is the line that wins the room: it shows why a static gene test (GeneSight) isn't enough.
+- Serotonergic combination caution (e.g. existing tramadol/triptan/SNRI).
 
-- **Escitalopram + CYP2C19 Poor Metabolizer** → exposure is markedly higher in PMs; DPWG advises reducing to ≤50% of the normal max dose, or choosing an alternative. Output: *"Reduce starting dose / consider alternative — CYP2C19 PM, ~2–3× higher escitalopram exposure (CPIC/DPWG)."*
-- **Escitalopram + CYP2C19 Ultrarapid Metabolizer** → lower exposure, higher risk of non-response/switching. Output: *"Standard dose may underexpose; monitor response, consider alternative (CYP2C19 UM)."*
-- **Phenoconversion case:** patient is **CYP2D6 genotype Normal** but is **on paroxetine/fluoxetine/bupropion** → flag *functional* PM for CYP2D6-metabolized candidates. Output: *"Effective CYP2D6 poor metabolizer due to interacting drug (strong inhibitor present) — genotype alone would miss this."* **This is the slide that wins the room** — it shows why a static gene test (GeneSight) is not enough and a context-aware tool is.
-- **Serotonergic combo flag:** candidate SSRI + existing serotonergic agent (e.g. tramadol, triptan, another SSRI/SNRI, MAOI) → serotonin-syndrome caution line.
-
-Make every output line carry a **source tag** (CPIC 2023 / DPWG 2023 / FASS). Traceability is the credibility.
+Every output line carries a **source tag** (kunskapsstöd för vårdgivare / CPIC 2023 / DPWG 2023 / FASS). Traceability is the credibility. The escalate/switch line is written as a **DRAFT** the clinician signs.
 
 ---
 
 ## 9. Regulatory note (build-time implications, brief)
 
-A tool that **generates a drug/dose recommendation** is, under EU MDR Rule 11, realistically a **Class IIa** medical device (more if a wrong output could cause serious harm). That is a post-hackathon concern, but two build choices keep options open:
+Automated patient outreach + a dose-steering recommendation is realistically **EU MDR Class IIa**. That is a post-hackathon concern, but build choices keep options open:
 
-- Keep the engine **rule-based and fully traceable** (every recommendation cites a guideline). Easier to validate than a model.
-- Frame the UI as **decision *support*** — it informs the clinician, who decides. Avoid language/UX that "auto-prescribes."
+- The AI **captures and documents**; a **rule-based, fully traceable engine decides**; the **clinician signs**. Keep those three roles separate in the code and the pitch.
+- Every recommendation **cites a guideline**. Easier to validate than a model.
+- A **suicidality red flag hard-escalates** rather than sitting in a draft — patient-safety surface of an autonomous call, handled explicitly.
+- Patient data leaving the EHR (the call) needs **consent + minimization** — deferred GDPR work, behind the provider interface.
 
-You don't need to do anything regulatory for the demo. Just don't architect it as an opaque auto-prescriber.
+Don't architect it as an opaque auto-prescriber, and don't let the AI be the medical decision-maker.
 
 ---
 
 ## 10. Demo script (what to show on stage)
 
-1. Open the mock EHR (SMART-EHR-Launcher), patient already loaded.
-2. Click "Attune" → panel launches embedded, **already knowing the patient** (no login). Say: *"Standard SMART on FHIR launch — same way it drops into Cambio Cosmic."*
-3. Show it reading the **live medication list** via FHIR.
-4. Set the CYP2C19 phenotype dropdown to **Poor Metabolizer** → recommendation updates with a sourced dose-reduction line.
-5. **The money moment:** keep genotype "Normal," but show a patient already on paroxetine → Attune flags **functional CYP2D6 poor metabolizer via phenoconversion**. Say: *"A static gene test would call this patient normal. Attune doesn't, because it reads the medication list."*
-6. Switch to a browser tab showing the **Cambio COS sandbox** call returning FHIR data. Say: *"This isn't a mockup — we're running against Cambio's open FHIR sandbox."*
+1. "GP starts an SSRI, then the follow-up gets dropped. Attune runs that loop."
+2. Trigger the scheduler → Attune **calls the patient** (mocked AI voice). The patient reports worsening insomnia + flat mood; the interview yields **MADRS-S 28** (flat at 4 weeks).
+3. The loop → **escalate**, naming the rung: **escitalopram 10 → 15 mg**, with the source tag. Selection flags **functional CYP2D6 poor metabolizer via phenoconversion** from the **real** read med list (paroxetine). *"A static gene test would call this patient normal. Attune doesn't, because it reads the medication list."*
+4. **The money shot:** open **OpenEMR** and show the **Encounter + SOAP note (the interview + rating + the escalation DRAFT) + the review Appointment** that Attune just wrote. *"This is a real EHR we host ourselves — no mockup. No one staffed this call. Attune made it, ran the guideline interview, and put the result and the next step straight into the journal. The doctor just reviews and signs."*
 
 ---
 
@@ -218,47 +158,44 @@ You don't need to do anything regulatory for the demo. Just don't architect it a
 
 | Block | Task | Done = |
 |---|---|---|
-| 0–2h | Scaffold Vite app, install `fhirclient`, hello-world | App runs locally |
-| 2–5h | SMART launch against `launch.smarthealthit.org`, read Patient + MedicationRequest | Console logs real patient + meds |
-| 5–9h | Rule engine v1: CYP2C19 + escitalopram dosing, 3–4 hard-coded drug-gene rules | Recommendation text from inputs |
-| 9–13h | **Phenoconversion logic** + interaction/serotonergic flags | The demo's hero case works |
-| 13–17h | Recommendation panel UI, phenotype dropdown, source tags | Looks clinical, updates live |
-| 17–20h | Embed in `SMART-EHR-Launcher` so it renders inside a mock EHR | Looks "inside" an EHR |
-| 20–22h | Cambio COS: sign up, one real FHIR call | Traction line is true |
-| 22–24h | Polish, rehearse the §10 script, fallbacks | Smooth 2-min run |
+| 0–2h | Scaffold the TS service + Vitest | Smoke test passes |
+| 2–6h | Loop engine + ratingscale (pure, TDD) incl. **flat-at-4-weeks → escalate naming the rung** | Hero decision works in tests |
+| 6–9h | Selection + **phenoconversion** (paroxetine → functional CYP2D6 PM) | The differentiator works in tests |
+| 9–13h | OpenEMR client (FHIR read + Standard-REST write) + writeback | Round-trip writes a note in tests |
+| 13–17h | Outreach provider + structured interview + mock + capture + suicidality red flag | Tick → call → score → writeback |
+| 17–21h | OpenEMR Docker stack + `setup-openemr.sh` + live round-trip | Real Encounter/SOAP/Appt ids printed |
+| 21–24h | Polish, rehearse the §10 script, fallbacks | Smooth 2-min run |
 
 ---
 
 ## 12. Fallback ladder (if something breaks)
 
-- **SMART launch won't cooperate in time** → run as a **standalone SMART app** (still uses FHIR + a patient picker) and *describe* the embedded launch. Still real, still FHIR-based.
-- **CORS blocks browser→FHIR calls** → stand up a 20-line Node/Express proxy that forwards FHIR reads.
-- **Everything FHIR breaks** → load a **local synthetic FHIR `Bundle` JSON** and run the engine against it. State clearly it's synthetic data; the rule engine (the actual product) is unchanged. Better an honest local-data demo than a fake live one.
+- **Live AI telephony won't cooperate** → `OUTREACH_MOCK=1` returns a scripted interview result; *describe* the live call. The loop + writeback are unchanged and real.
+- **A Standard-REST write 401s** → check the scope and that you passed the numeric pid (not the UUID) where required; the encounter uses the UUID, soap_note + appointment use the pid.
+- **Everything OpenEMR breaks** → run the loop against the in-memory plan store and a fake openemr client and show the decision + the note body it *would* write. State clearly it's local; the rule engine (the product) is unchanged. Better an honest local demo than a fake live one.
 
 ---
 
 ## 13. Hard rules — do not violate
 
-- **Do not OCR or scrape the EHR screen.** Use FHIR.
-- **Do not build a standalone marketing website.** Build the launchable app.
-- **Do not claim Attune predicts efficacy.** It flags exposure/tolerability risk and interactions, and contextualizes genetics. Say that precisely.
-- **Do not present synthetic/simulated data as live** without saying so.
+- **Do not OCR or scrape the EHR screen.** Read FHIR; write the Standard REST API.
+- **Do not build a standalone marketing website or a read-only panel.** Build the headless loop that calls the patient and writes the note.
+- **Do not claim the AI picks the drug, or that Attune predicts efficacy.** The AI captures and documents; the rule engine decides; the doctor signs. It flags exposure/tolerability risk and interactions, and contextualizes genetics. Say that precisely.
+- **Do not present simulated data (the genome default, the mocked call) as live** without saying so.
 - **Do not hard-code a "magic AI picks the drug" black box.** Rule-based + sourced. That's the whole positioning.
 
 ---
 
 ## 14. Links
 
+- OpenEMR (self-hosted EHR): https://github.com/openemr/openemr
+- OpenEMR API/FHIR docs: https://github.com/openemr/openemr/blob/master/API_README.md
 - SMART App Launch spec: https://hl7.org/fhir/smart-app-launch/
-- SMART App Launcher (sandbox): https://launch.smarthealthit.org
-- fhirclient.js docs: https://docs.smarthealthit.org
-- EHR simulator (embed your app): https://github.com/aehrc/SMART-EHR-Launcher
 - Cambio Open Services (COS): https://developer.openservices.cambio.se
-- Cambio FHIR API list: https://fhir.openservices.cambio.se/site/index.html
-- Cambio innovation (register idea for COS): https://www.cambio.se/innovation/register-innovation/
+- Region Stockholm kunskapsstöd (the follow-up loop guideline): https://kunskapsstodforvardgivare.se
 - CPIC guidelines (drug-gene dosing): https://cpicpgx.org
 - DPWG / PharmGKB: https://www.pharmgkb.org
 
 ---
 
-*Owner's note: the rule engine (§8), especially the phenoconversion case, is the product. The FHIR/SMART plumbing is a means to make it land "inside the EHR." If you're short on time, cut polish, not the phenoconversion logic.*
+*Owner's note: the loop engine and the phenoconversion case (§8) are the product. The AI call is how the loop actually runs without a clinician staffing it; the journal write-back is how the result lands where the doctor works. If you're short on time, cut polish and live telephony — not the loop logic, the phenoconversion, or the real write-back.*
